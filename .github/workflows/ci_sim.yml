@@ -113,7 +113,7 @@ jobs:
       CI_SIM_VENV: ${{ github.workspace }}/.work/ci-sim-venv
       VPTO_SIM_WORKSPACE: ${{ github.workspace }}/.work/vpto-sim-ci
       TILELIB_ST_WORKSPACE: ${{ github.workspace }}/.work/tilelib-st-ci
-      PYPTO_REF: ef6ce7cd8bd33b4c93b58dc34830a20b145736ac
+      PYPTO_REF: 8e7c98dea04881c13cc661eb163a1e006a402cea
       PYPTO_WORKSPACE: ${{ github.workspace }}/.work/pypto-ci
       PYPTO_RUN_WORKSPACE: ${{ github.workspace }}/.work/pypto-run-ci
       # GitHub pin containing the unified TFILLPAD API, the two-argument Soft
@@ -440,7 +440,7 @@ jobs:
       - name: Checkout PyPTO
         uses: actions/checkout@v4
         with:
-          repository: hw-native-sys/pypto
+          repository: pto3-dev/pypto
           ref: ${{ env.PYPTO_REF }}
           path: ${{ env.PYPTO_WORKSPACE }}
           fetch-depth: 1
@@ -450,7 +450,7 @@ jobs:
       - name: Checkout PTO-ISA
         uses: actions/checkout@v4
         with:
-          repository: hw-native-sys/pto-isa
+          repository: pto3-dev/pto-isa
           ref: ${{ env.PTO_ISA_COMMIT }}
           path: ${{ env.PTO_ISA_ROOT }}
           fetch-depth: 1
