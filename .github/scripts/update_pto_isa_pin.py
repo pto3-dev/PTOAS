@@ -28,7 +28,7 @@ TARGETS = {
         compatibility="default CANN CI, container, compile-only, and remote validation",
     ),
     "github-ci-sim": PinTarget(
-        repo_url="https://github.com/hw-native-sys/pto-isa.git",
+        repo_url="https://github.com/pto3-dev/pto-isa.git",
         compatibility="GitHub CPU-simulator CI",
     ),
     "cann90-dev": PinTarget(
