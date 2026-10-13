@@ -187,12 +187,6 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (failed(validateTransfer(op, store.getDst(), store.getSrc())))
                 return WalkResult::interrupt();
         }
-        if (isa<TAddOp, TSubOp, TMulOp>(op)) {
-            for (Type type : op->getOperandTypes())
-                if (auto tile = dyn_cast<TileBufType>(type))
-                    if ((tile.getShape()[0] * tile.getShape()[1]) % (256 / vectorElementBytes(tile.getElementType())))
-                        return reject("A1 binary vector arithmetic requires complete 256-byte repeats.");
-        }
         if (auto event = dyn_cast_or_null<EventAttr>(op->getAttr("event_id")))
             if (static_cast<unsigned>(event.getEvent()) == kA1ReservedEventId)
                 return reject("A1 event ID 7 is reserved for ISA helpers.");

@@ -422,7 +422,8 @@ The executable vector profile accepts static, full, row-major FP16/FP32 Vec tile
 and static two-dimensional ND transfers with contiguous or strided rows. Row
 strides and widths must be aligned to 32 bytes, and partitions must fit their
 source views;
-Binary arithmetic requires complete 256-byte repeats (128 FP16 or 64 FP32 elements).
+Binary arithmetic masks a final incomplete 256-byte repeat (128 FP16 or
+64 FP32 elements per complete repeat); DMA rows remain 32-byte aligned.
 Load/store, `TADD`, `TSUB`, `TMUL`, pointer/view construction, allocation, block
 indices, and local synchronization are enabled.
 Allocation valid-row/column operands that prove the complete static tile
