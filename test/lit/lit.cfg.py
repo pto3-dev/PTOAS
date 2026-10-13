@@ -46,6 +46,9 @@ config.ptoir_test_tools_dir = os.path.join(config.ptoir_obj_root,
 config.substitutions.append(('%PATH%', config.environment['PATH']))
 config.substitutions.append(('%shlibext', config.llvm_shlib_ext))
 
+if getattr(config, 'ptoas_emitc_only_build', False):
+    config.available_features.add('emitc-only-build')
+
 if getattr(config, 'pto_enable_vfsim_costmodel', False):
     config.available_features.add('vfsim-costmodel')
 

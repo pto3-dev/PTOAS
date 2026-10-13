@@ -37,7 +37,7 @@ PTOAS/
 
 ## 3. 构建指南 (Build Instructions)
 
-⚠️ **重要提示**：本项目严格依赖 **LLVM19 VPTO 分支 `vpto-dev/llvm-project:feature-vpto`**。
+⚠️ **重要提示**：默认的完整构建依赖 **LLVM19 VPTO 分支 `vpto-dev/llvm-project:feature-vpto`**。仅需 EmitC 时，可使用下述可选构建配置。
 
 
 ### 3.0 环境变量配置 (Configuration)
@@ -393,3 +393,19 @@ test/samples/MatMul/npu_validation/tmatmulk/run.sh
 - `compare.py` 负责对比 `golden*.bin` 与 `output*.bin`，不一致时会报错
 
 ---
+
+### 仅 EmitC 的开发构建
+
+310P/A1 的初始适配使用 EmitC，不依赖 VPTO LLVM 对象发射。使用上游 LLVM 19 时可显式设置
+`-DPTOAS_EMITC_ONLY_BUILD=ON`。默认关闭此选项，保留完整构建对 VPTO LLVM 分支的要求。
+开启后，VPTO 后端、分区模块的对象组装（包括混合 EmitC/VPTO）以及 VPTO IR/LLVM 输出请求会在执行 pipeline 前明确报错。
+可一次编译一个 EmitC 模块；不会自动回退为 EmitC。CLI 显式指定 `--pto-backend=emitc` 仍覆盖模块的后端属性。
+MLIR Python source declarations 和聚合对象仍须由 LLVM/MLIR 构建提供，此选项本身不启用 A1 架构。
+
+```bash
+cmake -S . -B build -DLLVM_DIR="$LLVM_BUILD_DIR/lib/cmake/llvm" \
+  -DMLIR_DIR="$LLVM_BUILD_DIR/lib/cmake/mlir" -DPTOAS_EMITC_ONLY_BUILD=ON
+cmake --build build --target PTOASPythonPackage --parallel 2
+```
+
+验证此配置时，运行 `test/lit/pto/emitc_only_*.pto` 和所需 EmitC 用例；VPTO 用例要求完整构建。
