@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 --plan-memory-impl=modern %s -o - | FileCheck %s
+// RUN: ptoas --plan-memory-impl=legacy %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_fp32_masked_add(%out: !pto.ptr<f32>, %lhs: !pto.ptr<f32>, %rhs: !pto.ptr<f32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 1 : index
+    %cols = arith.constant 8 : index
+    %lhs_view = pto.make_tensor_view %lhs, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %rhs_view = pto.make_tensor_view %rhs, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %out_view = pto.make_tensor_view %out, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %lhs_part = pto.partition_view %lhs_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x8xf32>
+    %rhs_part = pto.partition_view %rhs_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x8xf32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x8xf32>
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 1x8xf32>
+    %b = pto.alloc_tile : !pto.tile_buf<vec, 1x8xf32>
+    %c = pto.alloc_tile : !pto.tile_buf<vec, 1x8xf32>
+    pto.tload ins(%lhs_part : !pto.partition_tensor_view<1x8xf32>) outs(%a : !pto.tile_buf<vec, 1x8xf32>)
+    pto.tload ins(%rhs_part : !pto.partition_tensor_view<1x8xf32>) outs(%b : !pto.tile_buf<vec, 1x8xf32>)
+    pto.tadd ins(%a, %b : !pto.tile_buf<vec, 1x8xf32>, !pto.tile_buf<vec, 1x8xf32>) outs(%c : !pto.tile_buf<vec, 1x8xf32>)
+    pto.tstore ins(%c : !pto.tile_buf<vec, 1x8xf32>) outs(%out_part : !pto.partition_tensor_view<1x8xf32>)
+    return
+  }
+}
+
+// CHECK: a1_fp32_masked_add(
+// CHECK: Tile<TileType::Vec, float, 1, 8,
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TADD(
+// CHECK: TSTORE(
