@@ -419,7 +419,9 @@ VPTO and mixed architecture modules are rejected. The EmitC-only build above
 can be used with upstream LLVM 19.
 
 The executable vector profile accepts static, full, row-major FP16/FP32 Vec tiles
-and contiguous two-dimensional ND transfers. Rows must be aligned to 32 bytes;
+and static two-dimensional ND transfers with contiguous or strided rows. Row
+strides and widths must be aligned to 32 bytes, and partitions must fit their
+source views;
 Binary arithmetic requires complete 256-byte repeats (128 FP16 or 64 FP32 elements).
 Load/store, `TADD`, `TSUB`, `TMUL`, pointer/view construction, allocation, block
 indices, and local synchronization are enabled.

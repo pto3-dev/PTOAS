@@ -62,9 +62,10 @@ LogicalResult validateView(MakeTensorViewOp view)
     auto cols = constantInt(view.getShape()[1]);
     auto rowStride = constantInt(view.getStrides()[0]);
     auto colStride = constantInt(view.getStrides()[1]);
-    if (!rows || !cols || *rows <= 0 || *cols <= 0 || rowStride != cols || colStride != 1 ||
-        *cols % (32 / vectorElementBytes(type.getElementType())))
-        return view.emitError("A1 vector lowering requires static contiguous aligned tensor views.");
+    if (!rows || !cols || !rowStride || *rows <= 0 || *cols <= 0 || *rowStride < *cols || colStride != 1 ||
+        *cols % (32 / vectorElementBytes(type.getElementType())) ||
+        *rowStride % (32 / vectorElementBytes(type.getElementType())))
+        return view.emitError("A1 vector lowering requires static non-overlapping 32-byte-aligned tensor rows.");
     return success();
 }
 
@@ -76,12 +77,20 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
         return op->emitError("A1 DMA requires a two-dimensional partition matching its tile.");
     auto rows = constantInt(partition.getSizes()[0]);
     auto cols = constantInt(partition.getSizes()[1]);
-    auto offset = partition.getOffsets().size() == 2 ? constantInt(partition.getOffsets()[1]) : std::nullopt;
+    if (partition.getOffsets().size() != 2)
+        return op->emitError("A1 DMA requires two partition offsets.");
+    const int64_t rowOffset = constantInt(partition.getOffsets()[0]).value_or(-1);
+    const int64_t colOffset = constantInt(partition.getOffsets()[1]).value_or(-1);
     auto view = partition.getSource().getDefiningOp<MakeTensorViewOp>();
-    if (!rows || !cols || *rows != tile.getShape()[0] || *cols != tile.getShape()[1] || !offset ||
-        *offset % (32 / vectorElementBytes(tile.getElementType())) || !view ||
-        constantInt(view.getStrides()[0]) != cols)
-        return op->emitError("A1 DMA requires matching static tile sizes, contiguous rows and aligned column offsets.");
+    if (!rows || !cols || *rows != tile.getShape()[0] || *cols != tile.getShape()[1] || !view || rowOffset < 0 ||
+        colOffset < 0 || colOffset % (32 / vectorElementBytes(tile.getElementType())))
+        return op->emitError("A1 DMA requires matching static tile sizes and nonnegative aligned partition offsets.");
+    if (failed(validateView(view)))
+        return failure();
+    const int64_t viewRows = *constantInt(view.getShape()[0]);
+    const int64_t viewCols = *constantInt(view.getShape()[1]);
+    if (*rows > viewRows || *cols > viewCols || rowOffset > viewRows - *rows || colOffset > viewCols - *cols)
+        return op->emitError("A1 DMA partition must fit within its source tensor view.");
     return success();
 }
 
