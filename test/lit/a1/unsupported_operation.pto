@@ -9,7 +9,7 @@
 // RUN: not ptoas --pto-arch=a1 %s -o - 2>&1 | FileCheck %s
 module {
   func.func @bad_op(%a: !pto.tile_buf<vec, 16x128xf16>, %b: !pto.tile_buf<vec, 16x128xf16>, %c: !pto.tile_buf<vec, 16x128xf16>) {
-    pto.tsub ins(%a, %b : !pto.tile_buf<vec, 16x128xf16>, !pto.tile_buf<vec, 16x128xf16>) outs(%c : !pto.tile_buf<vec, 16x128xf16>)
+    pto.tabs ins(%a : !pto.tile_buf<vec, 16x128xf16>) outs(%c : !pto.tile_buf<vec, 16x128xf16>)
     return
   }
 }
