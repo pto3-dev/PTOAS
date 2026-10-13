@@ -9,8 +9,8 @@
 // RUN: not ptoas --pto-arch=a1 %s -o - 2>&1 | FileCheck %s
 module {
   func.func @bad_type() {
-    %tile = pto.alloc_tile : !pto.tile_buf<vec, 16x128xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 16x128xi32>
     return
   }
 }
-// CHECK: A1 vector lowering requires FP16 Vec tiles
+// CHECK: A1 vector lowering requires FP16 or FP32 Vec tiles
