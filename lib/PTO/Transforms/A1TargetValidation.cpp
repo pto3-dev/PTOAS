@@ -96,6 +96,33 @@ LogicalResult validateType(Operation* op, Type type)
 }
 } // namespace
 
+void mlir::pto::normalizeA1StaticValidShapes(ModuleOp module)
+{
+    if (!isTargetArchA1(module))
+        return;
+    module.walk([](AllocTileOp alloc) {
+        auto type = dyn_cast<TileBufType>(alloc.getResult().getType());
+        if (!type || type.getShape().size() != 2 || type.getValidShape() == type.getShape())
+            return;
+        auto shape = type.getShape();
+        auto valid = type.getValidShape();
+        if (valid.size() != 2 || shape[0] <= 0 || shape[1] <= 0)
+            return;
+        auto row =
+            ShapedType::isDynamic(valid[0]) ? constantInt(alloc.getValidRow()) : std::optional<int64_t>(valid[0]);
+        auto col =
+            ShapedType::isDynamic(valid[1]) ? constantInt(alloc.getValidCol()) : std::optional<int64_t>(valid[1]);
+        if (row != shape[0] || col != shape[1])
+            return;
+        // Each SSA use observes the refined allocation type. Explicit valid
+        // operands are redundant once the same extents live in the type.
+        alloc.getResult().setType(TileBufType::get(
+            type.getContext(), shape, type.getElementType(), type.getMemorySpace(), shape, type.getConfigAttr()));
+        alloc.getValidRowMutable().clear();
+        alloc.getValidColMutable().clear();
+    });
+}
+
 LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
 {
     if (!isTargetArchA1(module))

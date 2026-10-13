@@ -1351,6 +1351,7 @@ static LogicalResult buildBackendInfo(ModuleOp module, bool cliBackendSpecified,
   }
   // Check the intact module before the driver splits nested modules into jobs.
   // Otherwise a child can lose its A1 parent and bypass the target contract.
+  mlir::pto::normalizeA1StaticValidShapes(module);
   if (failed(mlir::pto::validateA1Capabilities(module)))
     return failure();
 #ifdef PTOAS_EMITC_ONLY_BUILD

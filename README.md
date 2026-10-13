@@ -422,6 +422,8 @@ The initial executable profile accepts static, full, row-major FP16 Vec tiles
 and contiguous two-dimensional ND transfers. Rows must be aligned to 32 bytes;
 TADD requires complete 128-element repeats. Only load/add/store, pointer/view
 construction, allocation, block indices, and local synchronization are enabled.
+Allocation valid-row/column operands that prove the complete static tile
+shape are normalized to static type dimensions, including PyPTO output.
 Unsupported types, layouts, operations, transfer modes and event ID 7 fail
 compilation. Dynamic valid shapes, BF16, atomics, matrix operations, cross-core
 synchronization and persistent execution need separate backend features.

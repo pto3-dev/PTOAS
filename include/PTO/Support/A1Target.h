@@ -40,6 +40,8 @@ inline A1MemorySpec getA1MemorySpec(AddressSpace space)
     }
 }
 
+// Materialize full valid shapes only when both allocation operands prove them.
+void normalizeA1StaticValidShapes(ModuleOp module);
 LogicalResult validateA1Capabilities(ModuleOp module);
 
 } // namespace mlir::pto
