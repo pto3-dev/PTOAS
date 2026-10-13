@@ -363,6 +363,17 @@ static bool isA5DeviceSpec(StringRef spec) {
   return spec.starts_with("Ascend950") || spec.starts_with("Ascend910_95");
 }
 
+static bool isA1ModuleTarget(ModuleOp module) {
+  for (ModuleOp current = module; current;
+       current = current->getParentOfType<ModuleOp>()) {
+    if (auto arch = current->getAttrOfType<StringAttr>(kPTOTargetArchAttrName))
+      return arch.getValue().equals_insensitive("a1");
+    if (auto spec = current->getAttrOfType<StringAttr>("pto.device-spec"))
+      return spec.getValue().starts_with("Ascend310P");
+  }
+  return false;
+}
+
 static bool isA5ModuleTarget(ModuleOp module) {
   if (!module) {
     return false;
@@ -379,11 +390,15 @@ static bool isA5ModuleTarget(ModuleOp module) {
 }
 
 PTOArch mlir::pto::getTargetArch(ModuleOp module) {
+  if (isA1ModuleTarget(module))
+    return PTOArch::A1;
   if (isA5ModuleTarget(module)) {
     return PTOArch::A5;
   }
 
   switch (getPTOParserTargetArch(module ? module.getContext() : nullptr)) {
+  case PTOParserTargetArch::A1:
+    return PTOArch::A1;
   case PTOParserTargetArch::A5:
     return PTOArch::A5;
   case PTOParserTargetArch::A3:
@@ -401,6 +416,8 @@ PTOArch mlir::pto::getTargetArch(Operation *op) {
     return getTargetArch(module);
   }
   switch (getPTOParserTargetArch(op->getContext())) {
+  case PTOParserTargetArch::A1:
+    return PTOArch::A1;
   case PTOParserTargetArch::A5:
     return PTOArch::A5;
   case PTOParserTargetArch::A3:
@@ -408,6 +425,14 @@ PTOArch mlir::pto::getTargetArch(Operation *op) {
     break;
   }
   return PTOArch::A3;
+}
+
+bool mlir::pto::isTargetArchA1(ModuleOp module) {
+  return getTargetArch(module) == PTOArch::A1;
+}
+
+bool mlir::pto::isTargetArchA1(Operation *op) {
+  return getTargetArch(op) == PTOArch::A1;
 }
 
 bool mlir::pto::isTargetArchA3(ModuleOp module) {
@@ -636,6 +661,9 @@ static VerifierTargetArch getVerifierTargetArch(Operation *op) {
   switch (getPTOParserTargetArch(op ? op->getContext() : nullptr)) {
   case PTOParserTargetArch::A5:
     return VerifierTargetArch::A5;
+  // A1 uses the common rank/layout structural checks. Its instruction and
+  // resource constraints are checked separately before lowering.
+  case PTOParserTargetArch::A1:
   case PTOParserTargetArch::A3:
   case PTOParserTargetArch::Unspecified:
     return VerifierTargetArch::A2A3;

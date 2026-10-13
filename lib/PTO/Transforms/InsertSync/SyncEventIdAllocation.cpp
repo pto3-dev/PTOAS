@@ -11,6 +11,7 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
+#include "PTO/Support/A1Target.h"
 #include <algorithm>
 #include "PTO/Transforms/InsertSync/SyncCommon.h"
 #include "PTO/Transforms/InsertSync/SyncEventIdAllocation.h"
@@ -82,6 +83,11 @@ bool SyncEventIdAllocation::tryWidenOnFirstFound() {
 }
 
 void SyncEventIdAllocation::reserveBlockAllEventIds() {
+  for (const auto &element : syncIR_)
+    if (element->elementOp && isTargetArchA1(element->elementOp)) {
+      isA1Target_ = true;
+      break;
+    }
   bool blockSyncAllExists = false;
   for (auto &element : syncIR_) {
     for (auto &syncOp : element->pipeBefore) {
@@ -135,6 +141,9 @@ size_t SyncEventIdAllocation::GetCompilerAvailableEventIdNum(const SyncOperation
       sync->GetType() == SyncOperation::TYPE::SYNC_BLOCK_WAIT) {
     return kBlockSyncSetWaitEventIdNum - reservedBlockSyncEventIdNum;
   }
+  // Reservations belong to this target instance, never to the shared map.
+  if (isA1Target_)
+    return kA1ReservedEventId;
   auto it = reservedEventIdNum.find({sync->GetSrcPipe(), sync->GetDstPipe()});
   if (it != reservedEventIdNum.end()) {
     return kTotalEventIdNum - it->second;
