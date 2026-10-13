@@ -409,3 +409,44 @@ cmake --build build --target PTOASPythonPackage --parallel 2
 ```
 
 验证此配置时，运行 `test/lit/pto/emitc_only_*.pto` 和所需 EmitC 用例；VPTO 用例要求完整构建。
+
+## Ascend 310P / A1 EmitC target
+
+Select the independent A1 target with `--pto-arch=a1` (case insensitive),
+`pto.target_arch = "a1"`, or `pto.device-spec = "Ascend310P3"`. An explicit
+CLI architecture takes precedence over module metadata. A1 supports EmitC;
+VPTO and mixed architecture modules are rejected. The EmitC-only build above
+can be used with upstream LLVM 19.
+
+The initial executable profile accepts static, full, row-major FP16 Vec tiles
+and contiguous two-dimensional ND transfers. Rows must be aligned to 32 bytes;
+TADD requires complete 128-element repeats. Only load/add/store, pointer/view
+construction, allocation, block indices, and local synchronization are enabled.
+Unsupported types, layouts, operations, transfer modes and event ID 7 fail
+compilation. Dynamic valid shapes, BF16, atomics, matrix operations, cross-core
+synchronization and persistent execution need separate backend features.
+
+Both memory planners use the A1 conservative budgets: UB 128 KiB, L1 512 KiB,
+L0A/L0B 64 KiB and L0C 256 KiB. Non-vector spaces remain unavailable to this
+first instruction profile. Event IDs 0–6 are compiler-owned; ID 7 is reserved
+for ISA helpers. Local set/wait synchronization runs by default on A1.
+`--enable-inject-barrier-all-sync` selects the conservative alternative;
+explicitly disabling all automatic synchronization is rejected.
+
+```bash
+# Requires the A1 vector implementation from the matching pto-isa branch.
+ptoas --pto-arch=a1 --plan-memory-impl=modern \
+  test/lit/a1/fp16_vector.pto -o a1_vector_add.cpp
+# Compile with CANN's 310P compiler and the matching ISA checkout.
+# Set PTO_ISA_ROOT and CANN_ROOT to your ISA checkout and installed CANN SDK.
+"$CANN_ROOT/bin/ccec" -c -std=c++17 -O2 -x cce --cce-aicore-only \
+  --cce-aicore-arch=dav-m200 -I "$PTO_ISA_ROOT/include" \
+  a1_vector_add.cpp -o a1_vector_add.o
+# The entry ABI is (out, lhs, rhs), each a GM half pointer. The ISA's
+# tests/compile/a1_single_launch.cpp can validate 2048 elements at blockDim=1.
+# Generated code uses manual tile addresses and local events; do not define
+# __PTO_AUTO__. GM argument pointers must be aligned to 32 bytes.
+```
+
+A1 targets real Ascend 310P hardware. CPU simulation checks the numerical
+reference only and does not model 310P pipeline or memory behavior.
