@@ -420,8 +420,9 @@ can be used with upstream LLVM 19.
 
 The executable vector profile accepts static, full, row-major FP16/FP32 Vec tiles
 and contiguous two-dimensional ND transfers. Rows must be aligned to 32 bytes;
-TADD requires complete 256-byte repeats (128 FP16 or 64 FP32 elements). Only load/add/store, pointer/view
-construction, allocation, block indices, and local synchronization are enabled.
+Binary arithmetic requires complete 256-byte repeats (128 FP16 or 64 FP32 elements).
+Load/store, `TADD`, `TSUB`, `TMUL`, pointer/view construction, allocation, block
+indices, and local synchronization are enabled.
 Allocation valid-row/column operands that prove the complete static tile
 shape are normalized to static type dimensions, including PyPTO output.
 Unsupported types, layouts, operations, transfer modes and event ID 7 fail

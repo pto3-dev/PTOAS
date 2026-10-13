@@ -147,8 +147,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         }
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
-                AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, SetFlagOp,
-                WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
+                AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
+                SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -178,11 +178,11 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (failed(validateTransfer(op, store.getDst(), store.getSrc())))
                 return WalkResult::interrupt();
         }
-        if (isa<TAddOp>(op)) {
+        if (isa<TAddOp, TSubOp, TMulOp>(op)) {
             for (Type type : op->getOperandTypes())
                 if (auto tile = dyn_cast<TileBufType>(type))
                     if ((tile.getShape()[0] * tile.getShape()[1]) % (256 / vectorElementBytes(tile.getElementType())))
-                        return reject("A1 TADD requires complete 256-byte repeats.");
+                        return reject("A1 binary vector arithmetic requires complete 256-byte repeats.");
         }
         if (auto event = dyn_cast_or_null<EventAttr>(op->getAttr("event_id")))
             if (static_cast<unsigned>(event.getEvent()) == kA1ReservedEventId)
