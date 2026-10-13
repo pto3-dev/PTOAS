@@ -1337,6 +1337,20 @@ static LogicalResult buildBackendInfo(ModuleOp module, bool cliBackendSpecified,
     return failure();
   }
 
+#ifdef PTOAS_EMITC_ONLY_BUILD
+  if (!backendInfo.singleBackend) {
+    return module.emitError(
+        "partitioned object assembly is unavailable in a "
+        "PTOAS_EMITC_ONLY_BUILD compiler; compile one EmitC module at a time.");
+  }
+  if (*backendInfo.singleBackend != mlir::pto::PTOBackend::EmitC ||
+      mlir::pto::emitVPTO || mlir::pto::emitVPTOLLVMDialect) {
+    return module.emitError(
+        "VPTO is unavailable in a PTOAS_EMITC_ONLY_BUILD compiler; "
+        "use the EmitC backend or rebuild with VPTO-enabled LLVM 19.");
+  }
+#endif
+
   if (backendInfo.singleBackend) {
     backendInfo.requiresToolchain =
         *backendInfo.singleBackend == mlir::pto::PTOBackend::VPTO &&

@@ -9,6 +9,7 @@
 #include "VFSIMTSizePatcher.h"
 
 #include "PTO/Support/CodeConstants.h"
+#include "PTO/Support/LLVMCallingConvention.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -161,13 +162,14 @@ collectManifest(llvm::Module &module, llvm::raw_ostream &diagOS) {
   llvm::SmallVector<SimtCallSite, mlir::pto::kValue4> manifest;
   for (llvm::Function &caller : module) {
     if (caller.isDeclaration() ||
-        caller.getCallingConv() == llvm::CallingConv::SimtEntry) {
+        mlir::pto::isSimtEntryCallingConvention(caller.getCallingConv())) {
       continue;
     }
     for (llvm::BasicBlock &block : caller) {
       for (llvm::Instruction &instruction : block) {
         auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction);
-        if (!call || call->getCallingConv() != llvm::CallingConv::SimtEntry) {
+        if (!call ||
+            !mlir::pto::isSimtEntryCallingConvention(call->getCallingConv())) {
           continue;
         }
         llvm::Function *callee = call->getCalledFunction();
@@ -177,7 +179,7 @@ collectManifest(llvm::Module &module, llvm::raw_ostream &diagOS) {
                         "' contains an indirect or undefined SIMT call");
           return failure();
         }
-        if (callee->getCallingConv() != llvm::CallingConv::SimtEntry) {
+        if (!mlir::pto::isSimtEntryCallingConvention(callee->getCallingConv())) {
           emitError(diagOS,
                     llvm::Twine("callee '") + callee->getName() +
                         "' does not use the SIMT entry calling convention");

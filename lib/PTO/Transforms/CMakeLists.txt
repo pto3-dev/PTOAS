@@ -21,23 +21,7 @@ if(TARGET vfsim::ir_planner)
     $<BUILD_INTERFACE:vfsim::ir_planner>)
 endif()
 
-add_mlir_dialect_library(PTOTransforms
-  ENABLE_AGGREGATION
-
-  TileFusion/FusionAnalysis.cpp
-  TileFusion/FusionOpSemantics.cpp
-  TileFusion/PTOPreFusionAnalysis.cpp
-  TileFusion/PTOPrintPreFusionAnalysis.cpp
-  TileFusion/PTOFusionPlan.cpp
-  TileFusion/PTOOpScheduling.cpp
-  TileFusion/PTOMarkLastUse.cpp
-  TileFusion/PTOFusionRegionGen.cpp
-  TileFusion/PTOLowLevelLoopFusion.cpp
-  TileFusion/PTOFusionPredicateElision.cpp
-  TileFusion/PTOFusionLoadStoreElision.cpp
-  TileFusion/PTOVexpdifFusion.cpp
-  TileFusion/PTOUnrollAfterLoopFusion.cpp
-  TileFusion/PTOFlattenFusionRegion.cpp
+set(_ptoas_vpto_llvm_full_sources
   VPTOLLVMEmitter.cpp
   VPTOLLVMEmitter/VPTOLLVMEmitterCommon.cpp
   VPTOLLVMEmitter/VPTOLLVMEmitterBasic.cpp
@@ -63,6 +47,33 @@ add_mlir_dialect_library(PTOTransforms
   VPTOCANN900LLVMEmitterScalarPatterns.cpp
   VPTOCANN900LLVMEmitterTypeHelpers.cpp
   VPTOCANN900LLVMEmitterTypePatterns.cpp
+)
+if(PTOAS_EMITC_ONLY_BUILD)
+  set(_ptoas_vpto_llvm_sources VPTOEmissionUnavailable.cpp)
+  list(APPEND LLVM_OPTIONAL_SOURCES ${_ptoas_vpto_llvm_full_sources})
+else()
+  set(_ptoas_vpto_llvm_sources ${_ptoas_vpto_llvm_full_sources})
+  list(APPEND LLVM_OPTIONAL_SOURCES VPTOEmissionUnavailable.cpp)
+endif()
+
+add_mlir_dialect_library(PTOTransforms
+  ENABLE_AGGREGATION
+
+  TileFusion/FusionAnalysis.cpp
+  TileFusion/FusionOpSemantics.cpp
+  TileFusion/PTOPreFusionAnalysis.cpp
+  TileFusion/PTOPrintPreFusionAnalysis.cpp
+  TileFusion/PTOFusionPlan.cpp
+  TileFusion/PTOOpScheduling.cpp
+  TileFusion/PTOMarkLastUse.cpp
+  TileFusion/PTOFusionRegionGen.cpp
+  TileFusion/PTOLowLevelLoopFusion.cpp
+  TileFusion/PTOFusionPredicateElision.cpp
+  TileFusion/PTOFusionLoadStoreElision.cpp
+  TileFusion/PTOVexpdifFusion.cpp
+  TileFusion/PTOUnrollAfterLoopFusion.cpp
+  TileFusion/PTOFlattenFusionRegion.cpp
+  ${_ptoas_vpto_llvm_sources}
   VPTOLLVMEmitterDispatcher.cpp
   VPTOLLVMEmitterHelper.cpp
   VPTOPtrNormalize.cpp
