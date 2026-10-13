@@ -418,9 +418,9 @@ CLI architecture takes precedence over module metadata. A1 supports EmitC;
 VPTO and mixed architecture modules are rejected. The EmitC-only build above
 can be used with upstream LLVM 19.
 
-The initial executable profile accepts static, full, row-major FP16 Vec tiles
+The executable vector profile accepts static, full, row-major FP16/FP32 Vec tiles
 and contiguous two-dimensional ND transfers. Rows must be aligned to 32 bytes;
-TADD requires complete 128-element repeats. Only load/add/store, pointer/view
+TADD requires complete 256-byte repeats (128 FP16 or 64 FP32 elements). Only load/add/store, pointer/view
 construction, allocation, block indices, and local synchronization are enabled.
 Allocation valid-row/column operands that prove the complete static tile
 shape are normalized to static type dimensions, including PyPTO output.

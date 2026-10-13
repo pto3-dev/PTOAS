@@ -24,21 +24,25 @@ std::optional<int64_t> constantInt(Value value)
     return integer.getSExtValue();
 }
 
+unsigned vectorElementBytes(Type element) { return element.isF16() ? 2 : 4; }
+
 LogicalResult validateTile(Operation* op, TileBufType tile)
 {
     auto shape = tile.getShape();
     auto space = dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace());
-    if (!space || space.getAddressSpace() != AddressSpace::VEC || !tile.getElementType().isF16())
-        return op->emitError("A1 vector lowering requires FP16 Vec tiles.");
+    if (!space || space.getAddressSpace() != AddressSpace::VEC ||
+        (!tile.getElementType().isF16() && !tile.getElementType().isF32()))
+        return op->emitError("A1 vector lowering requires FP16 or FP32 Vec tiles.");
     if (shape.size() != 2 || shape[0] <= 0 || shape[1] <= 0 || tile.getValidShape() != shape ||
         tile.getBLayoutValueI32() != 0 || tile.getSLayoutValueI32() != 0 || tile.getCompactModeI32() != 0)
         return op->emitError("A1 vector lowering requires static full row-major tile shapes.");
-    if (shape[1] % 16 || shape[0] > static_cast<int64_t>(kA1UBCapacityBytes / 2) / shape[1])
+    const unsigned elementBytes = vectorElementBytes(tile.getElementType());
+    if (shape[1] % (32 / elementBytes) || shape[0] > static_cast<int64_t>(kA1UBCapacityBytes / elementBytes) / shape[1])
         return op->emitError("A1 vector tile must have 32-byte-aligned rows and fit the 128 KiB UB budget.");
     if (auto alloc = dyn_cast<AllocTileOp>(op)) {
         if (alloc.getAddr()) {
             auto addr = constantInt(alloc.getAddr());
-            uint64_t bytes = static_cast<uint64_t>(shape[0] * shape[1]) * 2;
+            uint64_t bytes = static_cast<uint64_t>(shape[0] * shape[1]) * elementBytes;
             if (!addr || *addr < 0 || *addr % 32 || static_cast<uint64_t>(*addr) > kA1UBCapacityBytes - bytes)
                 return op->emitError("A1 tile address must be static, aligned, and within the 128 KiB UB budget.");
         }
@@ -58,7 +62,8 @@ LogicalResult validateView(MakeTensorViewOp view)
     auto cols = constantInt(view.getShape()[1]);
     auto rowStride = constantInt(view.getStrides()[0]);
     auto colStride = constantInt(view.getStrides()[1]);
-    if (!rows || !cols || *rows <= 0 || *cols <= 0 || rowStride != cols || colStride != 1 || *cols % 16)
+    if (!rows || !cols || *rows <= 0 || *cols <= 0 || rowStride != cols || colStride != 1 ||
+        *cols % (32 / vectorElementBytes(type.getElementType())))
         return view.emitError("A1 vector lowering requires static contiguous aligned tensor views.");
     return success();
 }
@@ -73,8 +78,9 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
     auto cols = constantInt(partition.getSizes()[1]);
     auto offset = partition.getOffsets().size() == 2 ? constantInt(partition.getOffsets()[1]) : std::nullopt;
     auto view = partition.getSource().getDefiningOp<MakeTensorViewOp>();
-    if (!rows || !cols || *rows != tile.getShape()[0] || *cols != tile.getShape()[1] || !offset || *offset % 16 ||
-        !view || constantInt(view.getStrides()[0]) != cols)
+    if (!rows || !cols || *rows != tile.getShape()[0] || *cols != tile.getShape()[1] || !offset ||
+        *offset % (32 / vectorElementBytes(tile.getElementType())) || !view ||
+        constantInt(view.getStrides()[0]) != cols)
         return op->emitError("A1 DMA requires matching static tile sizes, contiguous rows and aligned column offsets.");
     return success();
 }
@@ -90,8 +96,8 @@ LogicalResult validateType(Operation* op, Type type)
         element = tensor.getElementType();
     if (auto partition = dyn_cast<PartitionTensorViewType>(type))
         element = partition.getElementType();
-    if (element && !element.isF16())
-        return op->emitError("A1 vector lowering requires FP16 tensor data.");
+    if (element && !element.isF16() && !element.isF32())
+        return op->emitError("A1 vector lowering requires FP16 or FP32 tensor data.");
     return success();
 }
 } // namespace
@@ -175,8 +181,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (isa<TAddOp>(op)) {
             for (Type type : op->getOperandTypes())
                 if (auto tile = dyn_cast<TileBufType>(type))
-                    if ((tile.getShape()[0] * tile.getShape()[1]) % 128)
-                        return reject("A1 TADD requires complete 128-element repeats.");
+                    if ((tile.getShape()[0] * tile.getShape()[1]) % (256 / vectorElementBytes(tile.getElementType())))
+                        return reject("A1 TADD requires complete 256-byte repeats.");
         }
         if (auto event = dyn_cast_or_null<EventAttr>(op->getAttr("event_id")))
             if (static_cast<unsigned>(event.getEvent()) == kA1ReservedEventId)
