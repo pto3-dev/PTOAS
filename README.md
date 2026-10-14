@@ -459,7 +459,7 @@ reference only and does not model 310P pipeline or memory behavior.
 
 The A1 matrix profile supports initialized FP16 multiplication with
 K=N=16 and aligned full M rows from 16 through 2048, producing FP32 output.
-ND inputs load into ZZ or NZ Mat tiles, moves prepare NZ Left and ZN
+Aligned ND inputs load into ZZ or NZ Mat tiles, moves prepare NZ Left and ZN
 Right operands, and an explicit `single_mode_vec0` move writes the FP32 NZ
 accumulator into a matching FP32 ND Vec tile before storing. Acc-to-Vec runs on
 `PIPE_V` on A1; A3/A5 retain FIX mapping. Larger K/N, partial rows, dual
@@ -476,3 +476,5 @@ Memory budgets apply to the complete row tile; larger K/N and partial
 rows remain unavailable.
 
 A1 `pto.tmatmul.acc` supports in-place accumulation in this narrow profile. Input and output must be the same SSA accumulator buffer, initialized by `pto.tmatmul`; unit flags and result-valued forms are rejected. EmitC calls the release-guarded A1 `TMATMUL_ACC` API.
+
+A1 matrix loads also accept static aligned ND row strides for Nx16 FP16 panels. Partition sizes, aligned offsets and source bounds retain their checks. The ISA uses row bursts for 16-bit DMA gaps and individual row copies for wider gaps, enabling panels from wider K/N matrices while each MAD remains K=N=16.

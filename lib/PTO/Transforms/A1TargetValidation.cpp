@@ -222,12 +222,6 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             const auto location = cast<AddressSpaceAttr>(tile.getMemorySpace()).getAddressSpace();
             if (location != AddressSpace::VEC && location != AddressSpace::MAT)
                 return reject("A1 loads require a Vec or Mat destination.");
-            if (location == AddressSpace::MAT) {
-                auto partition = load.getSrc().getDefiningOp<PartitionViewOp>();
-                auto view = partition ? partition.getSource().getDefiningOp<MakeTensorViewOp>() : MakeTensorViewOp{};
-                if (!view || view.getStrides().size() != 2 || constantInt(view.getStrides()[0]) != 16)
-                    return reject("A1 matrix loads require contiguous 16-element tensor rows.");
-            }
             if (failed(validateTransfer(op, load.getSrc(), load.getDst())))
                 return WalkResult::interrupt();
         }
