@@ -456,3 +456,10 @@ ptoas --pto-arch=a1 --plan-memory-impl=modern \
 
 A1 targets real Ascend 310P hardware. CPU simulation checks the numerical
 reference only and does not model 310P pipeline or memory behavior.
+
+The A1 matrix profile supports one initialized 16x16 FP16 multiplication with
+FP32 output: ND inputs load into ZZ or NZ Mat tiles, moves prepare NZ Left and ZN
+Right operands, and an explicit `single_mode_vec0` move writes the FP32 NZ
+accumulator into a 16x16 FP32 ND Vec tile before storing. Acc-to-Vec runs on
+`PIPE_V` on A1; A3/A5 retain FIX mapping. Larger shapes, accumulation, dual
+worker modes, fused activation and direct accumulator stores are rejected.
