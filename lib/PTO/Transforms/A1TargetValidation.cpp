@@ -195,8 +195,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TMovOp, TMatmulOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp,
-                GetBlockIdxOp, GetBlockNumOp>(op))
+                TMovOp, TMatmulOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp, BarrierOp,
+                FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -277,6 +277,34 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 locationOf(matmul.getDst()) != AddressSpace::ACC || matmul.getNumResults() ||
                 matmul.getAccPhase() != AccPhase::Unspecified)
                 return reject("A1 matrix multiplication requires Left/Right-to-Acc without unit flags or results.");
+        }
+        if (auto convert = dyn_cast<TCvtOp>(op)) {
+            auto source = dyn_cast<TileBufType>(convert.getSrc().getType());
+            auto destination = dyn_cast<TileBufType>(convert.getDst().getType());
+            if (!source || !destination)
+                return reject("A1 conversion requires tile-buffer operands.");
+            if (locationOf(convert.getSrc()) != AddressSpace::VEC ||
+                locationOf(convert.getDst()) != AddressSpace::VEC ||
+                source.getElementType() == destination.getElementType() || convert.getTmp() ||
+                convert.getRmode() != RoundMode::NONE || convert.getSatMode() != SaturationMode::OFF)
+                return reject(
+                    "A1 conversion requires an FP16/FP32 Vec pair, NONE rounding, saturation OFF and no scratch.");
+            auto sourceAlloc = convert.getSrc().getDefiningOp<AllocTileOp>();
+            auto destinationAlloc = convert.getDst().getDefiningOp<AllocTileOp>();
+            auto sourceAddress = sourceAlloc ? constantInt(sourceAlloc.getAddr()) : std::nullopt;
+            auto destinationAddress = destinationAlloc ? constantInt(destinationAlloc.getAddr()) : std::nullopt;
+            if (sourceAddress && destinationAddress) {
+                const auto sourceBytes =
+                    source.getShape()[0] * source.getShape()[1] * vectorElementBytes(source.getElementType());
+                const auto destinationBytes = destination.getShape()[0] * destination.getShape()[1] *
+                                              vectorElementBytes(destination.getElementType());
+                const bool disjoint = *sourceAddress + sourceBytes <= *destinationAddress ||
+                                      *destinationAddress + destinationBytes <= *sourceAddress;
+                const bool narrowingAlias =
+                    destination.getElementType().isF16() && *sourceAddress == *destinationAddress;
+                if (!disjoint && !narrowingAlias)
+                    return reject("A1 conversion requires disjoint buffers or exact-alias FP32-to-FP16 narrowing.");
+            }
         }
         if (auto event = dyn_cast_or_null<EventAttr>(op->getAttr("event_id")))
             if (static_cast<unsigned>(event.getEvent()) == kA1ReservedEventId)

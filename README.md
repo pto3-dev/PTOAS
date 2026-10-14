@@ -463,3 +463,8 @@ Right operands, and an explicit `single_mode_vec0` move writes the FP32 NZ
 accumulator into a 16x16 FP32 ND Vec tile before storing. Acc-to-Vec runs on
 `PIPE_V` on A1; A3/A5 retain FIX mapping. Larger shapes, accumulation, dual
 worker modes, fused activation and direct accumulator stores are rejected.
+
+A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
+`NONE` rounding and saturation `OFF`, without scratch. The allocator must place
+source/destination in disjoint buffers, except exact-alias FP32-to-FP16 narrowing.
+Unsupported modes and known partial or widening overlaps are rejected before EmitC.
