@@ -1357,65 +1357,7 @@ def TMovOp  : PTO_TOp<"tmov", [
   let hasVerifier = 1;
 
   let extraClassDeclaration = [{
-    ::mlir::pto::PIPE getPipe() {
-      // TMOV spans multiple hardware pipelines depending on the source/dest
-      // domains. Most tile-domain moves are executed by MTE1 (e.g. MAT->L0),
-      // while UB->UB copies are vector-pipe operations.
-      auto getASFromType = [](Type ty)
-          -> std::optional<::mlir::pto::AddressSpace> {
-        if (auto tb = llvm::dyn_cast<::mlir::pto::TileBufType>(ty)) {
-          if (auto as = llvm::dyn_cast_or_null<::mlir::pto::AddressSpaceAttr>(
-                  tb.getMemorySpace()))
-            return as.getAddressSpace();
-          return std::nullopt;
-        }
-        return std::nullopt;
-      };
-
-      auto sOpt = getASFromType(getSrc().getType());
-      auto dOpt = getASFromType(getDst().getType());
-      if (!sOpt.has_value() || !dOpt.has_value())
-        return ::mlir::pto::PIPE::PIPE_V;
-
-      const auto s = sOpt.value();
-      const auto d = dOpt.value();
-
-      // UB -> UB copy is vector pipe.
-      if (s == ::mlir::pto::AddressSpace::VEC && d == ::mlir::pto::AddressSpace::VEC) {
-        return ::mlir::pto::PIPE::PIPE_V;
-      }
-
-      // MAT -> L0A/L0B/Bias moves run on MTE1.
-      if ((s == ::mlir::pto::AddressSpace::MAT &&
-           (d == ::mlir::pto::AddressSpace::LEFT || d == ::mlir::pto::AddressSpace::RIGHT ||
-            d == ::mlir::pto::AddressSpace::BIAS))) {
-        return ::mlir::pto::PIPE::PIPE_MTE1;
-      }
-
-      if (s == ::mlir::pto::AddressSpace::MAT &&
-          d == ::mlir::pto::AddressSpace::SCALING) {
-        // PTOAS uses SCALING for two distinct PTO-ISA destinations. A5 MX
-        // scale tiles are ScaleLeft/ScaleRight loads into L0A/L0B and run on
-        // MTE1. Regular Scaling tiles are FBUF loads (TMOV_M2S) and run on
-        // Distinguish the MX-only f8E8M0 type from regular scaling tiles.
-        Type dstElemTy;
-        if (auto tb = llvm::dyn_cast<::mlir::pto::TileBufType>(getDst().getType()))
-          dstElemTy = tb.getElementType();
-        if (dstElemTy && llvm::isa<::mlir::pto::F8E8M0Type>(dstElemTy))
-          return ::mlir::pto::PIPE::PIPE_MTE1;
-        return ::mlir::pto::PIPE::PIPE_FIX;
-      }
-
-      // ACC -> MAT / VEC use FIX in PTO-ISA sync mapping (TMOV_A2M/TMOV_A2V).
-      if (s == ::mlir::pto::AddressSpace::ACC &&
-          (d == ::mlir::pto::AddressSpace::MAT ||
-           d == ::mlir::pto::AddressSpace::VEC)) {
-        return ::mlir::pto::PIPE::PIPE_FIX;
-      }
-
-      // Fallback: treat as vector pipe (safe default for most intra-domain moves).
-      return ::mlir::pto::PIPE::PIPE_V;
-    }
+    ::mlir::pto::PIPE getPipe();
     ::mlir::MutableOperandRange getDpsInitsMutable() { return getDstMutable(); }
   }];
 }

@@ -30,6 +30,44 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
 {
     auto shape = tile.getShape();
     auto space = dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace());
+    if (space && space.getAddressSpace() != AddressSpace::VEC) {
+        const auto location = space.getAddressSpace();
+        if (shape.size() != 2 || shape[0] != 16 || shape[1] != 16 || tile.getValidShape() != shape ||
+            tile.getCompactModeI32() != 0)
+            return op->emitError("A1 matrix lowering requires static full single-fractal 16x16 tiles.");
+        const auto row = static_cast<int32_t>(BLayout::RowMajor);
+        const auto col = static_cast<int32_t>(BLayout::ColMajor);
+        const auto innerRow = static_cast<int32_t>(SLayout::RowMajor);
+        const auto innerCol = static_cast<int32_t>(SLayout::ColMajor);
+        bool supported = false;
+        if (location == AddressSpace::MAT)
+            supported = tile.getElementType().isF16() &&
+                        (tile.getBLayoutValueI32() == row || tile.getBLayoutValueI32() == col) &&
+                        tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 512;
+        if (location == AddressSpace::LEFT)
+            supported = tile.getElementType().isF16() && tile.getBLayoutValueI32() == col &&
+                        tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 512;
+        if (location == AddressSpace::RIGHT)
+            supported = tile.getElementType().isF16() && tile.getBLayoutValueI32() == row &&
+                        tile.getSLayoutValueI32() == innerCol && tile.getSFractalSizeI32() == 512;
+        if (location == AddressSpace::ACC)
+            supported = tile.getElementType().isF32() && tile.getBLayoutValueI32() == col &&
+                        tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 1024;
+        if (!supported)
+            return op->emitError("A1 matrix tiles require FP16 ZZ/NZ Mat, NZ Left/ZN Right or FP32 NZ Acc layouts.");
+        if (auto alloc = dyn_cast<AllocTileOp>(op)) {
+            if (alloc.getAddr()) {
+                auto addr = constantInt(alloc.getAddr());
+                const auto spec = getA1MemorySpec(location);
+                const uint64_t bytes = 256 * vectorElementBytes(tile.getElementType());
+                if (!addr || *addr < 0 || *addr % spec.alignmentBytes ||
+                    static_cast<uint64_t>(*addr) > spec.capacityBytes - bytes)
+                    return op->emitError(
+                        "A1 matrix tile address must be static, aligned and within its memory budget.");
+            }
+        }
+        return success();
+    }
     if (!space || space.getAddressSpace() != AddressSpace::VEC ||
         (!tile.getElementType().isF16() && !tile.getElementType().isF32()))
         return op->emitError("A1 vector lowering requires FP16 or FP32 Vec tiles.");
@@ -157,7 +195,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
+                TMovOp, TMatmulOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp,
+                GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -177,6 +216,18 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (load.getPadModeAttr() || load.getPadValue() || load.getLeftPaddingNum() || load.getRightPaddingNum() ||
                 load.getInitOutBuffer() || load.getInitCondition() || load.getCachePolicyAttr())
                 return reject("A1 load padding, initialization and cache-policy modes are unavailable.");
+            const auto tile = dyn_cast<TileBufType>(load.getDst().getType());
+            if (!tile)
+                return reject("A1 loads require tile-buffer destinations.");
+            const auto location = cast<AddressSpaceAttr>(tile.getMemorySpace()).getAddressSpace();
+            if (location != AddressSpace::VEC && location != AddressSpace::MAT)
+                return reject("A1 loads require a Vec or Mat destination.");
+            if (location == AddressSpace::MAT) {
+                auto partition = load.getSrc().getDefiningOp<PartitionViewOp>();
+                auto view = partition ? partition.getSource().getDefiningOp<MakeTensorViewOp>() : MakeTensorViewOp{};
+                if (!view || view.getStrides().size() != 2 || constantInt(view.getStrides()[0]) != 16)
+                    return reject("A1 matrix loads require contiguous 16-element tensor rows.");
+            }
             if (failed(validateTransfer(op, load.getSrc(), load.getDst())))
                 return WalkResult::interrupt();
         }
@@ -184,8 +235,48 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (store.getFp() || store.getPreQuantScalar() || store.getAtomicType() != AtomicType::AtomicNone ||
                 store.getStPhase() != STPhase::Unspecified || store.getReluPreMode() != ReluPreMode::NoRelu)
                 return reject("A1 store quantization, atomics, unit flags and relu modes are unavailable.");
+            const auto tile = dyn_cast<TileBufType>(store.getSrc().getType());
+            if (!tile)
+                return reject("A1 stores require tile-buffer sources.");
+            if (cast<AddressSpaceAttr>(tile.getMemorySpace()).getAddressSpace() != AddressSpace::VEC)
+                return reject("A1 stores require explicit accumulator-to-vector writeback.");
             if (failed(validateTransfer(op, store.getDst(), store.getSrc())))
                 return WalkResult::interrupt();
+        }
+        auto locationOf = [](Value value) -> std::optional<AddressSpace> {
+            auto tile = dyn_cast<TileBufType>(value.getType());
+            auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr{};
+            return space ? std::optional<AddressSpace>(space.getAddressSpace()) : std::nullopt;
+        };
+        if (isa<TAddOp, TSubOp, TMulOp>(op))
+            for (Value operand : op->getOperands())
+                if (locationOf(operand) != AddressSpace::VEC)
+                    return reject("A1 vector arithmetic requires Vec operands.");
+        if (auto move = dyn_cast<TMovOp>(op)) {
+            const auto src = locationOf(move.getSrc());
+            const auto dst = locationOf(move.getDst());
+            if (move.getFp() || move.getPreQuantScalar() || move.getGrpAxisAttr() || move.getNumResults() ||
+                move.getReluPreMode() != ReluPreMode::NoRelu)
+                return reject("A1 matrix moves do not support auxiliary operands, results or fused modes.");
+            if (src == AddressSpace::MAT && (dst == AddressSpace::LEFT || dst == AddressSpace::RIGHT)) {
+                if (move.getAccToVecModeAttr())
+                    return reject("A1 operand moves do not accept accumulator modes.");
+            } else if (src == AddressSpace::ACC && dst == AddressSpace::VEC) {
+                auto tile = cast<TileBufType>(move.getDst().getType());
+                if (tile.getShape()[0] != 16 || tile.getShape()[1] != 16 || !tile.getElementType().isF32() ||
+                    !move.getAccToVecModeAttr() ||
+                    move.getAccToVecModeAttr().getValue() != AccToVecMode::SingleModeVec0)
+                    return reject("A1 writeback requires FP32 ND 16x16 Vec and explicit single_mode_vec0.");
+            } else {
+                return reject("A1 matrix moves require Mat-to-Left/Right or Acc-to-Vec.");
+            }
+        }
+        if (auto matmul = dyn_cast<TMatmulOp>(op)) {
+            if (locationOf(matmul.getLhs()) != AddressSpace::LEFT ||
+                locationOf(matmul.getRhs()) != AddressSpace::RIGHT ||
+                locationOf(matmul.getDst()) != AddressSpace::ACC || matmul.getNumResults() ||
+                matmul.getAccPhase() != AccPhase::Unspecified)
+                return reject("A1 matrix multiplication requires Left/Right-to-Acc without unit flags or results.");
         }
         if (auto event = dyn_cast_or_null<EventAttr>(op->getAttr("event_id")))
             if (static_cast<unsigned>(event.getEvent()) == kA1ReservedEventId)
