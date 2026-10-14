@@ -195,8 +195,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TMovOp, TMatmulOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp, BarrierOp,
-                FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
+                TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp,
+                BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -280,6 +280,16 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 locationOf(matmul.getDst()) != AddressSpace::ACC || matmul.getNumResults() ||
                 matmul.getAccPhase() != AccPhase::Unspecified)
                 return reject("A1 matrix multiplication requires Left/Right-to-Acc without unit flags or results.");
+        }
+        if (auto matmul = dyn_cast<TMatmulAccOp>(op)) {
+            if (locationOf(matmul.getAccIn()) != AddressSpace::ACC ||
+                locationOf(matmul.getLhs()) != AddressSpace::LEFT ||
+                locationOf(matmul.getRhs()) != AddressSpace::RIGHT ||
+                locationOf(matmul.getDst()) != AddressSpace::ACC || matmul.getNumResults() ||
+                matmul.getAccPhase() != AccPhase::Unspecified)
+                return reject("A1 matrix accumulation requires Acc/Left/Right without unit flags or results.");
+            if (matmul.getAccIn() != matmul.getDst())
+                return reject("A1 matrix accumulation requires the same input/output accumulator SSA buffer.");
         }
         if (auto convert = dyn_cast<TCvtOp>(op)) {
             auto source = dyn_cast<TileBufType>(convert.getSrc().getType());
