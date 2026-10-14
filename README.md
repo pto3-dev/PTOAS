@@ -457,14 +457,20 @@ ptoas --pto-arch=a1 --plan-memory-impl=modern \
 A1 targets real Ascend 310P hardware. CPU simulation checks the numerical
 reference only and does not model 310P pipeline or memory behavior.
 
-The A1 matrix profile supports one initialized 16x16 FP16 multiplication with
-FP32 output: ND inputs load into ZZ or NZ Mat tiles, moves prepare NZ Left and ZN
+The A1 matrix profile supports initialized FP16 multiplication with
+K=N=16 and aligned full M rows from 16 through 2048, producing FP32 output.
+ND inputs load into ZZ or NZ Mat tiles, moves prepare NZ Left and ZN
 Right operands, and an explicit `single_mode_vec0` move writes the FP32 NZ
-accumulator into a 16x16 FP32 ND Vec tile before storing. Acc-to-Vec runs on
-`PIPE_V` on A1; A3/A5 retain FIX mapping. Larger shapes, accumulation, dual
+accumulator into a matching FP32 ND Vec tile before storing. Acc-to-Vec runs on
+`PIPE_V` on A1; A3/A5 retain FIX mapping. Larger K/N, partial rows, accumulation, dual
 worker modes, fused activation and direct accumulator stores are rejected.
 
 A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
 `NONE` rounding and saturation `OFF`, without scratch. The allocator must place
 source/destination in disjoint buffers, except exact-alias FP32-to-FP16 narrowing.
 Unsupported modes and known partial or widening overlaps are rejected before EmitC.
+
+The narrow A1 GEMM profile extends M to full static multiples of 16 through 2048
+while K=N=16. The single outer column of Mat/Acc fractals keeps ND element order.
+Memory budgets apply to the complete row tile; larger K/N, accumulation and partial
+rows remain unavailable.
