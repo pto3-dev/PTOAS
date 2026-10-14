@@ -32,9 +32,9 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
     auto space = dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace());
     if (space && space.getAddressSpace() != AddressSpace::VEC) {
         const auto location = space.getAddressSpace();
-        if (shape.size() != 2 || shape[0] != 16 || shape[1] != 16 || tile.getValidShape() != shape ||
-            tile.getCompactModeI32() != 0)
-            return op->emitError("A1 matrix lowering requires static full single-fractal 16x16 tiles.");
+        if (shape.size() != 2 || shape[0] < 16 || shape[0] > 2048 || shape[0] % 16 || shape[1] != 16 ||
+            tile.getValidShape() != shape || tile.getCompactModeI32() != 0)
+            return op->emitError("A1 narrow matrix lowering requires full aligned rows in [16, 2048] and 16 columns.");
         const auto row = static_cast<int32_t>(BLayout::RowMajor);
         const auto col = static_cast<int32_t>(BLayout::ColMajor);
         const auto innerRow = static_cast<int32_t>(SLayout::RowMajor);
@@ -48,7 +48,7 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
             supported = tile.getElementType().isF16() && tile.getBLayoutValueI32() == col &&
                         tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 512;
         if (location == AddressSpace::RIGHT)
-            supported = tile.getElementType().isF16() && tile.getBLayoutValueI32() == row &&
+            supported = shape[0] == 16 && tile.getElementType().isF16() && tile.getBLayoutValueI32() == row &&
                         tile.getSLayoutValueI32() == innerCol && tile.getSFractalSizeI32() == 512;
         if (location == AddressSpace::ACC)
             supported = tile.getElementType().isF32() && tile.getBLayoutValueI32() == col &&
@@ -59,7 +59,7 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
             if (alloc.getAddr()) {
                 auto addr = constantInt(alloc.getAddr());
                 const auto spec = getA1MemorySpec(location);
-                const uint64_t bytes = 256 * vectorElementBytes(tile.getElementType());
+                const uint64_t bytes = shape[0] * 16 * vectorElementBytes(tile.getElementType());
                 if (!addr || *addr < 0 || *addr % spec.alignmentBytes ||
                     static_cast<uint64_t>(*addr) > spec.capacityBytes - bytes)
                     return op->emitError(
@@ -259,14 +259,17 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 move.getReluPreMode() != ReluPreMode::NoRelu)
                 return reject("A1 matrix moves do not support auxiliary operands, results or fused modes.");
             if (src == AddressSpace::MAT && (dst == AddressSpace::LEFT || dst == AddressSpace::RIGHT)) {
+                if (cast<TileBufType>(move.getSrc().getType()).getShape() !=
+                    cast<TileBufType>(move.getDst().getType()).getShape())
+                    return reject("A1 matrix operand moves require matching full shapes.");
                 if (move.getAccToVecModeAttr())
                     return reject("A1 operand moves do not accept accumulator modes.");
             } else if (src == AddressSpace::ACC && dst == AddressSpace::VEC) {
                 auto tile = cast<TileBufType>(move.getDst().getType());
-                if (tile.getShape()[0] != 16 || tile.getShape()[1] != 16 || !tile.getElementType().isF32() ||
-                    !move.getAccToVecModeAttr() ||
+                if (tile.getShape()[0] != cast<TileBufType>(move.getSrc().getType()).getShape()[0] ||
+                    tile.getShape()[1] != 16 || !tile.getElementType().isF32() || !move.getAccToVecModeAttr() ||
                     move.getAccToVecModeAttr().getValue() != AccToVecMode::SingleModeVec0)
-                    return reject("A1 writeback requires FP32 ND 16x16 Vec and explicit single_mode_vec0.");
+                    return reject("A1 writeback requires matching FP32 ND Nx16 Vec and explicit single_mode_vec0.");
             } else {
                 return reject("A1 matrix moves require Mat-to-Left/Right or Acc-to-Vec.");
             }

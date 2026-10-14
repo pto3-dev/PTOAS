@@ -35,4 +35,4 @@ module attributes {pto.target_arch = "a1"} {
     return
   }
 }
-// CHECK: single-fractal 16x16 tiles
+// CHECK: full aligned rows in [16, 2048] and 16 columns
