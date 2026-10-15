@@ -101,7 +101,8 @@ LogicalResult validateView(MakeTensorViewOp view)
     auto rowStride = constantInt(view.getStrides()[0]);
     auto colStride = constantInt(view.getStrides()[1]);
     const unsigned block = 32 / vectorElementBytes(type.getElementType());
-    const bool packedColumn = rows && cols == 1 && rowStride == 1 && colStride == 1 && *rows > 0 && *rows % block == 0;
+    const bool packedColumn =
+        rows && cols == 1 && rowStride == 1 && colStride && *colStride > 0 && *rows > 0 && *rows % block == 0;
     auto supportedLayout = [&](Layout layout) {
         return layout == Layout::ND || (packedColumn && layout == Layout::DN);
     };
