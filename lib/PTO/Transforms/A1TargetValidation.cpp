@@ -195,8 +195,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TDivOp, TExpOp, TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp,
-                WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
+                TDivOp, TExpOp, TExpandsOp, TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp,
+                SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -246,6 +246,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             for (Value operand : op->getOperands())
                 if (locationOf(operand) != AddressSpace::VEC)
                     return reject("A1 vector arithmetic requires Vec operands.");
+        if (auto fill = dyn_cast<TExpandsOp>(op))
+            if (locationOf(fill.getDst()) != AddressSpace::VEC)
+                return reject("A1 scalar broadcast requires a Vec destination.");
         if (auto divide = dyn_cast<TDivOp>(op))
             if (divide.getPrecisionType() != DivPrecision::Default)
                 return reject("A1 division supports default precision only.");
