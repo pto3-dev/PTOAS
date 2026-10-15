@@ -207,9 +207,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TDivOp, TExpOp, TExpandsOp, TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TMatmulOp, TMatmulAccOp,
-                TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp,
-                GetBlockIdxOp, GetBlockNumOp>(op))
+                TDivOp, TExpOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp,
+                TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp,
+                BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -260,6 +260,24 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 if (locationOf(operand) != AddressSpace::VEC ||
                     cast<TileBufType>(operand.getType()).getBLayoutValueI32() != 0)
                     return reject("A1 vector arithmetic requires row-major Vec operands.");
+        if (isa<TRowExpandOp, TColExpandOp>(op)) {
+            Value source = op->getOperand(0), destination = op->getOperand(1);
+            auto src = cast<TileBufType>(source.getType());
+            auto dst = cast<TileBufType>(destination.getType());
+            const bool row = isa<TRowExpandOp>(op);
+            if (locationOf(source) != AddressSpace::VEC || locationOf(destination) != AddressSpace::VEC ||
+                dst.getBLayoutValueI32() != 0 || src.getBLayoutValueI32() != (row ? 1 : 0))
+                return reject(
+                    "A1 expansion requires a row-major Vec destination and packed Mx1 or row-major 1xN source.");
+            auto sa = source.getDefiningOp<AllocTileOp>(), da = destination.getDefiningOp<AllocTileOp>();
+            const int64_t sp = sa ? constantInt(sa.getAddr()).value_or(-1) : -1;
+            const int64_t dp = da ? constantInt(da.getAddr()).value_or(-1) : -1;
+            const int64_t sb = src.getShape()[0] * src.getShape()[1] * vectorElementBytes(src.getElementType());
+            const int64_t db = dst.getShape()[0] * dst.getShape()[1] * vectorElementBytes(dst.getElementType());
+            const bool alias = !row && (source == destination || (sp >= 0 && dp == sp));
+            if (!alias && (source == destination || (sp >= 0 && dp >= 0 && sp < dp + db && dp < sp + sb)))
+                return reject("A1 expansion requires disjoint storage except exact first-row column sources.");
+        }
         if (isa<TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp>(op)) {
             for (Value operand : op->getOperands())
                 if (locationOf(operand) != AddressSpace::VEC)
