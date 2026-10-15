@@ -480,3 +480,5 @@ A1 `pto.tmatmul.acc` supports in-place accumulation in this narrow profile. Inpu
 A1 matrix loads also accept static aligned ND row strides for Nx16 FP16 panels. Partition sizes, aligned offsets and source bounds retain their checks. The ISA uses row bursts for 16-bit DMA gaps and individual row copies for wider gaps, enabling panels from wider K/N matrices while each MAD remains K=N=16.
 
 A1 `TEXP` and `TDIV` accept full static ND FP16/FP32 Vec tiles with default precision, including masked final repeats. High-precision modes are rejected before EmitC. These native approximate instructions allow a tensor-form SiLU composition; scalar broadcasts and other activation families remain separate features.
+
+A1 `pto.texpands` broadcasts an FP16/FP32 scalar into a full static ND Vec tile. Final masked repeats and 255-repeat splitting use the matching ISA implementation; unvalidated layouts and dtypes retain their rejection checks.
