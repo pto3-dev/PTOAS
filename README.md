@@ -482,3 +482,5 @@ A1 matrix loads also accept static aligned ND row strides for Nx16 FP16 panels. 
 A1 `TEXP` and `TDIV` accept full static ND FP16/FP32 Vec tiles with default precision, including masked final repeats. High-precision modes are rejected before EmitC. These native approximate instructions allow a tensor-form SiLU composition; scalar broadcasts and other activation families remain separate features.
 
 A1 `pto.texpands` broadcasts an FP16/FP32 scalar into a full static ND Vec tile. Final masked repeats and 255-repeat splitting use the matching ISA implementation; unvalidated layouts and dtypes retain their rejection checks.
+
+A1 supports static FP16/FP32 `TROWSUM`, `TROWMAX`, `TCOLSUM` and `TCOLMAX`. Row results are aligned packed column-major Mx1 Vec buffers with full-size disjoint row-major scratch; matching contiguous Mx1 ND/DN views share their DMA path. Column sum supports only the sequential no-scratch form. Known overlaps, insufficient scratch and unaligned packed offsets are rejected before EmitC. Sum accumulation retains the input dtype; dynamic/unaligned tails and reduction-result broadcasts remain separate features.
