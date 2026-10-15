@@ -28,4 +28,4 @@ module attributes {pto.target_arch = "a1"} {
     return
   }
 }
-// CHECK: A1 reductions require disjoint source, result and scratch storage.
+// CHECK: A1 reductions require disjoint storage

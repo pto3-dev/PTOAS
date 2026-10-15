@@ -273,8 +273,11 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                     auto at = cast<TileBufType>(a.getType()), bt = cast<TileBufType>(b.getType());
                     const int64_t ab = at.getShape()[0] * at.getShape()[1] * vectorElementBytes(at.getElementType());
                     const int64_t bb = bt.getShape()[0] * bt.getShape()[1] * vectorElementBytes(bt.getElementType());
-                    if (a == b || (ap >= 0 && bp >= 0 && ap < bp + bb && bp < ap + ab))
-                        return reject("A1 reductions require disjoint source, result and scratch storage.");
+                    const bool firstRowAlias = isa<TColSumOp, TColMaxOp>(op) && op->getNumOperands() == 2 &&
+                                               bt.getShape()[0] == 1 && at.getShape()[1] == bt.getShape()[1] &&
+                                               (a == b || (ap >= 0 && bp == ap));
+                    if (!firstRowAlias && (a == b || (ap >= 0 && bp >= 0 && ap < bp + bb && bp < ap + ab)))
+                        return reject("A1 reductions require disjoint storage except exact first-row column results.");
                 }
             }
             if (isa<TRowSumOp, TRowMaxOp>(op)) {
