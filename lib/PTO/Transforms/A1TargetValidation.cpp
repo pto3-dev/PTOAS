@@ -195,8 +195,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp,
-                BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
+                TDivOp, TExpOp, TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp,
+                WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -242,10 +242,16 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr{};
             return space ? std::optional<AddressSpace>(space.getAddressSpace()) : std::nullopt;
         };
-        if (isa<TAddOp, TSubOp, TMulOp>(op))
+        if (isa<TAddOp, TSubOp, TMulOp, TDivOp, TExpOp>(op))
             for (Value operand : op->getOperands())
                 if (locationOf(operand) != AddressSpace::VEC)
                     return reject("A1 vector arithmetic requires Vec operands.");
+        if (auto divide = dyn_cast<TDivOp>(op))
+            if (divide.getPrecisionType() != DivPrecision::Default)
+                return reject("A1 division supports default precision only.");
+        if (auto exponential = dyn_cast<TExpOp>(op))
+            if (exponential.getPrecisionType() != ExpPrecision::Default)
+                return reject("A1 exponential supports default precision only.");
         if (auto move = dyn_cast<TMovOp>(op)) {
             const auto src = locationOf(move.getSrc());
             const auto dst = locationOf(move.getDst());
