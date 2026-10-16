@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -pto-validate-vmi-layout-ir -vmi-to-vpto | FileCheck %s --implicit-check-not=pto.vpack --implicit-check-not=pto.vmi.
+
+// NOSAT exposes low bytes at twice the source stride without a conversion.
+// SAT still visits all eight strided halfwords, including the last four slots
+// that would be masked out by a dense PAT_VL8 halfword predicate.
+module {
+  // CHECK-LABEL: func.func @trunc_ui16_gs2_to_ui8_gs4(
+  // CHECK-NOT: pto.vcvt
+  // CHECK-COUNT-2: pto.vbitcast {{.*}}!pto.vreg<128xui16> -> !pto.vreg<256xui8>
+  // CHECK: return
+  func.func @trunc_ui16_gs2_to_ui8_gs4(
+      %v: !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>)
+      -> !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 4>> {
+    %r = pto.vmi.trunci %v {saturate = "NOSAT"}
+        : !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+        -> !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 4>>
+    return %r : !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 4>>
+  }
+  // CHECK-LABEL: func.func @trunc_si16_gs2_to_ui8_gs4(
+  // CHECK: %[[MASK:.*]] = pto.pset_b16 "PAT_VL16"
+  // CHECK: pto.vcvt {{.*}}, %[[MASK]] {{.*}}part = "EVEN"{{.*}}sat = "SAT"
+  // CHECK: return
+  func.func @trunc_si16_gs2_to_ui8_gs4(
+      %v: !pto.vmi.vreg<16xsi16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>)
+      -> !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 4>> {
+    %r = pto.vmi.trunci %v {saturate = "SAT"}
+        : !pto.vmi.vreg<16xsi16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+        -> !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 4>>
+    return %r : !pto.vmi.vreg<16xui8, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 4>>
+  }
+  // Both masks address the same physical b32 lanes. Narrowing only changes
+  // the logical element granularity and stride, so no mask instruction is needed.
+  // CHECK-LABEL: func.func @trunc_mask_gs2_to_gs4(
+  // CHECK-SAME: %[[M:.*]]: !pto.mask<b32>) -> !pto.mask<b32>
+  // CHECK-NEXT: return %[[M]] : !pto.mask<b32>
+  func.func @trunc_mask_gs2_to_gs4(
+      %m: !pto.vmi.mask<8xb16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>)
+      -> !pto.vmi.mask<8xb8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>> {
+    %r = pto.vmi.ensure_mask_granularity %m
+        : !pto.vmi.mask<8xb16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+        -> !pto.vmi.mask<8xb8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
+    return %r : !pto.vmi.mask<8xb8, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 4>>
+  }
+}

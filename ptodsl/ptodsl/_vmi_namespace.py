@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Public PTODSL namespace for formal VMI APIs."""
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from ptoas.mlir.ir import (
     UnitAttr,
 )
 
+from ._ops_common import _validate_reduction_element_type
 from ._scalar_coercion import coerce_scalar_to_type
 from ._diagnostics import deprecated
 from ._surface_values import _coerce_index_value, _try_get_constant_index, unwrap_surface_value, wrap_surface_value
@@ -197,6 +200,16 @@ def _is_vmi_float_element_type(type_obj) -> bool:
     )
 
 
+def _is_vmi_vmula_element_type(type_obj) -> bool:
+    if IntegerType.isinstance(type_obj):
+        return IntegerType(type_obj).width in (16, 32)
+    return (
+        F16Type.isinstance(type_obj)
+        or BF16Type.isinstance(type_obj)
+        or F32Type.isinstance(type_obj)
+    )
+
+
 def _isinstance_pto_type(type_obj, type_name: str) -> bool:
     type_cls = getattr(_pto, type_name, None)
     if type_cls is None:
@@ -316,6 +329,30 @@ def _check_vmi_lane_count(lanes: int, *, context: str) -> None:
         )
 
 
+def _check_vmi_operand_lanes(vectors, mask, *, context: str) -> None:
+    """Validate public logical lengths before emitting an operation."""
+    expected_lanes = None
+    for name, value in vectors:
+        lanes = _vmi_vreg_element_count(_type_of(value), context=context)
+        _check_vmi_lane_count(lanes, context=f"{context} {name}")
+        if expected_lanes is not None and lanes != expected_lanes:
+            raise ValueError(
+                f"{context} requires matching logical lane counts; "
+                f"{name} has {lanes}, expected {expected_lanes}"
+            )
+        expected_lanes = lanes
+    mask_type = _as_vmi_mask_type(
+        _type_of(_required_mask(mask, context=context)), context=context
+    )
+    mask_lanes = _vmi_mask_element_count(mask_type, context=context)
+    _check_vmi_lane_count(mask_lanes, context=f"{context} mask")
+    if mask_lanes != expected_lanes:
+        raise ValueError(
+            f"{context} requires matching logical lane counts; "
+            f"mask has {mask_lanes}, expected {expected_lanes}"
+        )
+
+
 def _derive_vinterpret_cast_result_type(source, to_dtype, *, context: str):
     if to_dtype is None:
         raise TypeError(f"{context} requires to_dtype")
@@ -351,6 +388,7 @@ def _derive_vinterpret_cast_result_type(source, to_dtype, *, context: str):
 def _derive_vbrc_result_type(value, size, *, context: str):
     if size is None:
         raise TypeError(f"{context} requires size")
+    _check_vmi_lane_count(size, context=context)
     raw_value = _raw(value)
     if not hasattr(raw_value, "type"):
         raise TypeError(
@@ -368,6 +406,7 @@ def _derive_vbrc_result_type(value, size, *, context: str):
 def _derive_vci_result_type(base, size, *, context: str):
     if size is None:
         raise TypeError(f"{context} requires size")
+    _check_vmi_lane_count(size, context=context)
     raw_base = _raw(base)
     if not hasattr(raw_base, "type"):
         raise TypeError(
@@ -435,7 +474,7 @@ def _derive_vmull_result_types(a, b, *, context: str):
     return lhs_type, rhs_type
 
 
-def _derive_add_carry_result_types(lhs, rhs, mask, *, carry_in=None, context: str):
+def _derive_carry_result_types(lhs, rhs, mask, *, carry_in=None, context: str):
     lhs_type = _as_vmi_vreg_type(_type_of(lhs), context=context)
     rhs_type = _as_vmi_vreg_type(_type_of(rhs), context=context)
     if lhs_type != rhs_type:
@@ -510,6 +549,12 @@ def _derive_vgatherb_result_type(source, mask, *, context: str):
 
 def _derive_vmi_reduce_result_type(source, group, *, context: str):
     source_type = _as_vmi_vreg_type(_type_of(source), context=context)
+    element_type = source_type.element_type
+    if IntegerType.isinstance(element_type) and IntegerType(element_type).width == 8:
+        raise ValueError(
+            f"{context}: 8-bit integer reductions are not supported; "
+            "explicitly convert the source to a supported 16-bit or 32-bit type"
+        )
     result_lanes = 1
     if group is not None:
         try:
@@ -576,33 +621,22 @@ def _vmi_vreg_element_count(type_obj, *, context: str):
     raise TypeError(f"{context} could not determine VMI vector lane count from {type_obj}")
 
 
-def _resolve_vmi_vload_result_types(source, size, *, dist_mode, context: str):
+def _resolve_vmi_vload_result_type(source, size, *, context: str):
     if size is None:
         raise TypeError(f"{context} requires size")
+    _check_vmi_lane_count(size, context=context)
     element_type = _pointer_element_type(_type_of(source), context=context)
-    resolved = _pto.VMIVRegType.get(size, element_type)
-    if dist_mode == "dintlv":
-        return [resolved, resolved]
-    return [resolved]
+    return _pto.VMIVRegType.get(size, element_type)
 
 
-def _validate_vmi_load_modes(
+def _validate_vmi_memory_modes(
     context: str,
     *,
-    dist_mode,
     group,
     stride,
     block_stride,
-    allow_group_brc: bool,
-    allowed_dist_modes,
 ):
-    if dist_mode is not None and dist_mode not in allowed_dist_modes:
-        expected = ", ".join(repr(mode) for mode in sorted(allowed_dist_modes, key=str))
-        raise TypeError(f"{context} does not support dist_mode={dist_mode!r}; expected one of {expected}")
-
     if group is not None:
-        if dist_mode is not None and (not allow_group_brc or dist_mode != "brc"):
-            raise TypeError(f"{context} does not allow dist_mode together with group")
         if block_stride is not None:
             raise TypeError(f"{context} does not allow block_stride together with group")
         if stride is None:
@@ -610,8 +644,6 @@ def _validate_vmi_load_modes(
         return
 
     if block_stride is not None:
-        if dist_mode is not None:
-            raise TypeError(f"{context} does not allow dist_mode together with block_stride")
         if stride is not None:
             raise TypeError(f"{context} does not allow stride together with block_stride")
         return
@@ -700,17 +732,19 @@ def _emit_reduce(
     reassoc=_UNSPECIFIED,
 ):
     context = f"pto.vmi.{op_name}(...)"
+    result_type = _derive_vmi_reduce_result_type(source, group, context=context)
+    source_elem_type = _vmi_element_type(_type_of(source), context=context)
+    _validate_reduction_element_type(source_elem_type, context=context)
     if op_name == "vcadd":
-        source_elem_type = _vmi_element_type(_type_of(source), context=context)
         if reassoc is _UNSPECIFIED:
             if _is_vmi_float_element_type(source_elem_type):
                 raise TypeError(
                     f"{context} on floating-point vectors requires an explicit reassoc "
-                    "argument; spell out reassoc=True or reassoc=False"
+                    "argument; spell out reassoc=True"
                 )
-        elif not isinstance(reassoc, bool):
+        elif reassoc is not True:
             raise TypeError(
-                f"{context} requires reassoc to be the Python boolean True or False; "
+                f"{context} currently supports only reassoc=True; "
                 f"received {reassoc!r}"
             )
     kwargs = {"group": group, "pmode": pmode, "loc": loc, "ip": ip}
@@ -718,7 +752,7 @@ def _emit_reduce(
         kwargs["reassoc"] = UnitAttr.get()
     return _call_value(
         op_name,
-        _derive_vmi_reduce_result_type(source, group, context=context),
+        result_type,
         _raw(source),
         _required_mask(mask, context=context),
         **kwargs,
@@ -738,34 +772,28 @@ class _VMINamespace:
         size,
         stride=None,
         block_stride=None,
-        dist_mode=None,
         group=None,
         loc=None,
         ip=None,
     ):
-        _validate_vmi_load_modes(
+        _validate_vmi_memory_modes(
             "pto.vmi.vload(...)",
-            dist_mode=dist_mode,
             group=group,
             stride=stride,
             block_stride=block_stride,
-            allow_group_brc=True,
-            allowed_dist_modes={None, "continuous", "dintlv", "brc"},
         )
-        result_types = _resolve_vmi_vload_result_types(
+        result_type = _resolve_vmi_vload_result_type(
             source,
             size,
-            dist_mode=dist_mode,
             context="pto.vmi.vload(...)",
         )
         return _call_value(
             "vload",
-            result_types,
+            result_type,
             _raw(source),
             _coerce_index_value(offset),
             stride=None if stride is None else _coerce_index_value(stride),
             block_stride=_i16_value(block_stride, context="pto.vmi.vload(block_stride)"),
-            dist_mode=dist_mode,
             group=group,
             loc=loc,
             ip=ip,
@@ -780,49 +808,33 @@ class _VMINamespace:
         *,
         stride=None,
         block_stride=None,
-        dist_mode=None,
         group=None,
-        pmode=None,
         loc=None,
         ip=None,
     ):
-        _validate_vmi_load_modes(
+        _validate_vmi_memory_modes(
             "pto.vmi.vstore(...)",
-            dist_mode=dist_mode,
             group=group,
             stride=stride,
             block_stride=block_stride,
-            allow_group_brc=False,
-            allowed_dist_modes={None, "continuous", "intlv"},
         )
         if group is not None and mask is not None:
             raise TypeError("pto.vmi.vstore(...) group mode does not take a mask operand")
-        if dist_mode == "intlv":
-            if not _is_sequence(values) or len(values) != 2:
-                raise TypeError('pto.vmi.vstore(...) with dist_mode="intlv" requires an (even, odd) pair')
-        elif _is_sequence(values):
-            raise TypeError("pto.vmi.vstore(...) expects a single VMI vector unless dist_mode=\"intlv\"")
+        if _is_sequence(values):
+            raise TypeError(
+                "pto.vmi.vstore(...) expects one VMI vector; interleave vectors "
+                "with pto.vmi.vintlv(...) and store each result separately"
+            )
         return _generated("vstore")(
-            _raw_sequence(values),
+            _raw(values),
             _raw(destination),
             _coerce_index_value(offset),
             _variadic_mask(mask),
             stride=None if stride is None else _coerce_index_value(stride),
             block_stride=_i16_value(block_stride, context="pto.vmi.vstore(block_stride)"),
-            dist_mode=dist_mode,
             group=group,
-            pmode=pmode,
             loc=loc,
             ip=ip,
-        )
-
-    @staticmethod
-    def vsstb(value, destination, offset, block_stride, mask, *, pmode=None, loc=None, ip=None):
-        context = "pto.vmi.vsstb(...)"
-        return _generated("vsstb")(
-            _raw(value), _raw(destination), _coerce_index_value(offset),
-            _i16_value(block_stride, context=f"{context} block_stride"),
-            _required_mask(mask, context=context), pmode=pmode, loc=loc, ip=ip,
         )
 
     @staticmethod
@@ -861,7 +873,7 @@ class _VMINamespace:
         """Emit a 32-bit integer add with per-lane carry output."""
         context = "pto.vmi.vaddc(...)"
         mask_value = _required_mask(mask, context=context)
-        result_type, carry_type = _derive_add_carry_result_types(
+        result_type, carry_type = _derive_carry_result_types(
             lhs, rhs, mask_value, context=context
         )
         return _call_value(
@@ -876,11 +888,34 @@ class _VMINamespace:
         )
 
     @staticmethod
+    def vsubc(lhs, rhs, mask, *, loc=None, ip=None):
+        """Emit 32-bit subtraction with a per-lane not-borrow output.
+
+        A carry value of 1 means the lane completed without borrow; 0 means
+        that the lane borrowed.
+        """
+        context = "pto.vmi.vsubc(...)"
+        mask_value = _required_mask(mask, context=context)
+        result_type, carry_type = _derive_carry_result_types(
+            lhs, rhs, mask_value, context=context
+        )
+        return _call_value(
+            "vsubc",
+            result_type,
+            carry_type,
+            _raw(lhs),
+            _raw(rhs),
+            mask_value,
+            loc=loc,
+            ip=ip,
+        )
+
+    @staticmethod
     def vaddcs(lhs, rhs, carry_in, mask, *, loc=None, ip=None):
         """Emit a 32-bit integer add with carry input and carry output."""
         context = "pto.vmi.vaddcs(...)"
         mask_value = _required_mask(mask, context=context)
-        result_type, carry_type = _derive_add_carry_result_types(
+        result_type, carry_type = _derive_carry_result_types(
             lhs, rhs, mask_value, carry_in=carry_in, context=context
         )
         return _call_value(
@@ -896,6 +931,30 @@ class _VMINamespace:
         )
 
     vsub = staticmethod(lambda lhs, rhs, mask=None, **kw: _emit_binary("vsub", lhs, rhs, mask, **kw))
+
+    @staticmethod
+    def vsubcs(lhs, rhs, carry_in, mask, *, loc=None, ip=None):
+        """Emit 32-bit subtraction with per-lane not-borrow carry chaining.
+
+        Each lane computes ``lhs - rhs - (1 - carry_in)``. A carry-in or
+        carry-out value of 1 means no borrow; 0 means borrow.
+        """
+        context = "pto.vmi.vsubcs(...)"
+        mask_value = _required_mask(mask, context=context)
+        result_type, carry_type = _derive_carry_result_types(
+            lhs, rhs, mask_value, carry_in=carry_in, context=context
+        )
+        return _call_value(
+            "vsubcs",
+            result_type,
+            carry_type,
+            _raw(lhs),
+            _raw(rhs),
+            _raw(carry_in),
+            mask_value,
+            loc=loc,
+            ip=ip,
+        )
 
     @staticmethod
     def vmul(lhs, rhs, mask=None, **kw):
@@ -1211,6 +1270,12 @@ class _VMINamespace:
 
     @staticmethod
     def vmula(acc, lhs, rhs, mask, *, pmode=None, loc=None, ip=None):
+        element_type = _vmi_element_type(_type_of(acc), context="pto.vmi.vmula(...)")
+        if not _is_vmi_vmula_element_type(element_type):
+            raise TypeError(
+                "pto.vmi.vmula(...) requires f16, bf16, f32, i16, or i32 "
+                f"vector elements; got {element_type}"
+            )
         return _call_value(
             "vmula",
             _type_of(acc),
@@ -1225,6 +1290,9 @@ class _VMINamespace:
 
     @staticmethod
     def vdhist(acc, source, mask, *, loc=None, ip=None):
+        _check_vmi_operand_lanes(
+            (("source", source),), mask, context="pto.vmi.vdhist(...)"
+        )
         return _call_value(
             "vdhist",
             _derive_hist_result_type(acc, context="pto.vmi.vdhist(...)"),
@@ -1237,6 +1305,9 @@ class _VMINamespace:
 
     @staticmethod
     def vchist(acc, source, mask, *, loc=None, ip=None):
+        _check_vmi_operand_lanes(
+            (("source", source),), mask, context="pto.vmi.vchist(...)"
+        )
         return _call_value(
             "vchist",
             _derive_hist_result_type(acc, context="pto.vmi.vchist(...)"),
@@ -1279,6 +1350,11 @@ class _VMINamespace:
 
     @staticmethod
     def vscatter(value, destination, offsets, mask, *, pmode=None, loc=None, ip=None):
+        _check_vmi_operand_lanes(
+            (("value", value), ("offsets", offsets)),
+            mask,
+            context="pto.vmi.vscatter(...)",
+        )
         return _generated("vscatter")(
             _raw(value),
             _raw(destination),
@@ -1351,6 +1427,138 @@ class _VMINamespace:
             pmode=pmode,
             loc=loc,
             ip=ip,
+        )
+
+    @staticmethod
+    def channel_split(source, channels=2, *, loc=None, ip=None):
+        """Split one vector into N interleaved logical channels.
+
+        One-in / N-out halving deinterleave: channel 0 takes the even elements
+        and channel 1 the odd ones (see the VMIToVPTO lowering).
+        """
+        context = "pto.vmi.channel_split(...)"
+        if channels not in (2, 4):
+            raise ValueError(f"{context} supports 2 or 4 channels; got {channels!r}")
+        source_type = _as_vmi_vreg_type(_type_of(source), context=context)
+        source_lanes = _vmi_vreg_element_count(source_type, context=context)
+        if source_lanes % channels != 0:
+            raise ValueError(
+                f"{context} requires the source lane count to be divisible by "
+                f"channels; got {source_lanes} with {channels} channels"
+            )
+        elem = _vmi_element_type(source_type, context=context)
+        result_type = _pto.VMIVRegType.get(source_lanes // channels, elem)
+        result_types = [result_type for _ in range(channels)]
+        return _call_value("channel_split", result_types, _raw(source), loc=loc, ip=ip)
+
+    @staticmethod
+    def channel_merge(*channels, loc=None, ip=None):
+        """Merge logical channels by interleaving (inverse of channel_split)."""
+        context = "pto.vmi.channel_merge(...)"
+        if len(channels) not in (2, 4):
+            raise ValueError(f"{context} supports 2 or 4 channels; got {len(channels)}")
+        first_type = _as_vmi_vreg_type(_type_of(channels[0]), context=context)
+        lanes = _vmi_vreg_element_count(first_type, context=context)
+        elem = _vmi_element_type(first_type, context=context)
+        for channel in channels[1:]:
+            channel_type = _as_vmi_vreg_type(_type_of(channel), context=context)
+            if (
+                _vmi_vreg_element_count(channel_type, context=context) != lanes
+                or _vmi_element_type(channel_type, context=context) != elem
+            ):
+                raise TypeError(
+                    f"{context} requires every channel to share element type and lane count"
+                )
+        result_lanes = lanes * len(channels)
+        if result_lanes not in VMI_LANE_COUNTS:
+            raise ValueError(
+                f"{context} result lane count must be one of {VMI_LANE_COUNTS}; got {result_lanes}"
+            )
+        result_type = _pto.VMIVRegType.get(result_lanes, elem)
+        return _call_value(
+            "channel_merge",
+            result_type,
+            [_raw(channel) for channel in channels],
+            loc=loc,
+            ip=ip,
+        )
+
+
+
+    @staticmethod
+    def vunzip(source, to_dtype=None, *, loc=None, ip=None):
+        """Unzip every element into its low and high half-width halves.
+
+        to_dtype selects the half element type and defaults to the unsigned
+        half-width integer of the source element.
+        """
+        context = "pto.vmi.vunzip(...)"
+        source_type = _as_vmi_vreg_type(_type_of(source), context=context)
+        lanes = _vmi_vreg_element_count(source_type, context=context)
+        src_bits = _type_bit_width(
+            _vmi_element_type(source_type, context=context), context=context
+        )
+        if src_bits not in (16, 32):
+            raise ValueError(
+                f"{context} requires a 16- or 32-bit source element so the half "
+                f"is 8 or 16 bits; got {src_bits}"
+            )
+        if to_dtype is None:
+            half_type = IntegerType.get_unsigned(src_bits // 2)
+        else:
+            half_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
+            half_bits = _type_bit_width(half_type, context=context)
+            if half_bits * 2 != src_bits:
+                raise ValueError(
+                    f"{context} requires the target element storage width to be "
+                    f"exactly half the source width; got {half_bits} for a "
+                    f"{src_bits}-bit source"
+                )
+        result_type = _pto.VMIVRegType.get(lanes, half_type)
+        return _call_value(
+            "vunzip", result_type, result_type, _raw(source), loc=loc, ip=ip
+        )
+
+    @staticmethod
+    def vzip(low, high, to_dtype=None, *, loc=None, ip=None):
+        """Zip low/high half-width halves back into one wide vector.
+
+        to_dtype selects the wide element type and defaults to the unsigned
+        double-width integer of the half element.
+        """
+        context = "pto.vmi.vzip(...)"
+        low_type = _as_vmi_vreg_type(_type_of(low), context=context)
+        high_type = _as_vmi_vreg_type(_type_of(high), context=context)
+        lanes = _vmi_vreg_element_count(low_type, context=context)
+        high_lanes = _vmi_vreg_element_count(high_type, context=context)
+        half_elem = _vmi_element_type(low_type, context=context)
+        high_elem = _vmi_element_type(high_type, context=context)
+        if high_lanes != lanes or high_elem != half_elem:
+            raise ValueError(
+                f"{context} requires low and high to share one lane count and "
+                f"element type; got {lanes}x{half_elem} and "
+                f"{high_lanes}x{high_elem}"
+            )
+        half_bits = _type_bit_width(half_elem, context=context)
+        if half_bits not in (8, 16):
+            raise ValueError(
+                f"{context} requires an 8- or 16-bit half element so the wide "
+                f"element is 16 or 32 bits; got {half_bits}"
+            )
+        if to_dtype is None:
+            wide_type = IntegerType.get_unsigned(half_bits * 2)
+        else:
+            wide_type = _ensure_tensor_storage_dtype(to_dtype, context=context)
+            wide_bits = _type_bit_width(wide_type, context=context)
+            if wide_bits != half_bits * 2:
+                raise ValueError(
+                    f"{context} requires the wide element storage width to be "
+                    f"exactly twice the half width; got {wide_bits} for a "
+                    f"{half_bits}-bit half"
+                )
+        result_type = _pto.VMIVRegType.get(lanes, wide_type)
+        return _call_value(
+            "vzip", result_type, _raw(low), _raw(high), loc=loc, ip=ip
         )
 
 

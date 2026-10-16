@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,9 +6,11 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Table-driven selection and render coverage for the PTODSL TileLib catalog."""
 
 import ast
+from itertools import product
 from pathlib import Path
 import unittest
 
@@ -659,6 +662,25 @@ class TileLibCatalogTest(unittest.TestCase):
                 selected = select(op, "a5", specs)
                 self.assertIn(expected_op, selected.specialize(**specs).mlir_text())
 
+    def test_row_reductions_reject_unsupported_source_types(self):
+        # Row extremes additionally accept 8-bit integers on A5 (issue #1599);
+        # arg reductions and low-precision types stay rejected for all four.
+        ops = ("pto.trowmax", "pto.trowmin", "pto.trowargmax", "pto.trowargmin")
+        low_precision = ("bf16", "f8e4m3", "f8e5m2", "hif8")
+        for op, dtype in product(ops, low_precision):
+            _, _, parameters, _, candidate_id = _entry_parts(CATALOG[op])
+            with self.subTest(op=op, dtype=dtype):
+                specs = _specs(op, parameters, dtype)
+                with self.assertRaises(tilelib.NoMatchingTemplate):
+                    select(op, "a5", specs, candidate_id=candidate_id)
+        for op in ("pto.trowargmax", "pto.trowargmin"):
+            for dtype in ("i8", "ui8"):
+                _, _, parameters, _, candidate_id = _entry_parts(CATALOG[op])
+                with self.subTest(op=op, dtype=dtype):
+                    specs = _specs(op, parameters, dtype)
+                    with self.assertRaises(tilelib.NoMatchingTemplate):
+                        select(op, "a5", specs, candidate_id=candidate_id)
+
     def test_declared_dtype_signatures_are_selectable(self):
         for op, entry in CATALOG.items():
             _, _, parameter_names, representative_dtype, candidate_id = _entry_parts(entry)
@@ -933,8 +955,8 @@ class TileLibCatalogTest(unittest.TestCase):
         }
         selected = select("pto.tfillpad", "a5", specs)
         mlir = selected.specialize(**specs).mlir_text()
-        self.assertIn("arith.constant 0.000000e+00 : f32", mlir)
-        self.assertNotIn("arith.constant -1.000000e+00 : f32", mlir)
+        self.assertIn("pto.constant 0.000000e+00 : f32", mlir)
+        self.assertNotIn("pto.constant -1.000000e+00 : f32", mlir)
 
     def test_tcvt_contiguous_versions_select_flattened_candidates(self):
         signatures = {
@@ -1214,7 +1236,7 @@ class TileLibCatalogTest(unittest.TestCase):
         mlir = selected.specialize(**specs).mlir_text()
         self.assertIn("pto.mte_ub_ub", mlir)
         self.assertIn("pto.vbitsort", mlir)
-        self.assertIn("%c130", mlir)
+        self.assertIn("pto.constant 130 : index", mlir)
 
     def test_trandom_uses_valid_width_for_repeats(self):
         specs = {
@@ -1237,8 +1259,9 @@ class TileLibCatalogTest(unittest.TestCase):
         self.assertEqual(selected.name, "template_trandom")
         mlir = selected.specialize(context_attrs={"rounds": "10"}, **specs).mlir_text()
         self.assertIn("pto.tile_valid_cols %arg6", mlir)
-        self.assertIn("arith.floordivsi %3, %c256", mlir)
-        self.assertIn("arith.select", mlir)
+        self.assertIn("pto.floordiv", mlir)
+        self.assertIn(" signed :", mlir)
+        self.assertIn("pto.select", mlir)
         self.assertIn("pto.vaddc", mlir)
 
     def test_colarg_additional_dtype_versions_render(self):
@@ -1253,6 +1276,23 @@ class TileLibCatalogTest(unittest.TestCase):
                     selected = select(op, "a5", specs)
                     self.assertIn(dtype, selected.name)
                     self.assertIn("pto.vcmp", selected.specialize(**specs).mlir_text())
+
+    def test_colarg_full_dtype_matrix_renders(self):
+        # Every src dtype must pair with both i32 and ui32 index outputs
+        # (issue #1600: i16/i32 sources and ui32 indexes used to miss every template).
+        src_dtypes = ("f32", "f16", "ui16", "i16", "i32", "ui32", "i8", "ui8")
+        for op in ("pto.tcolargmax", "pto.tcolargmin"):
+            for src_dtype, index_dtype in product(src_dtypes, ("i32", "ui32")):
+                with self.subTest(op=op, src=src_dtype, index=index_dtype):
+                    specs = {
+                        "src": TileSpec(shape=(8, 64), dtype=ScalarType(src_dtype)),
+                        "tmp": TileSpec(shape=(8, 64), dtype=ScalarType(src_dtype)),
+                        "dst": TileSpec(shape=(8, 64), dtype=ScalarType(index_dtype), valid_shape=(1, 64)),
+                    }
+                    selected = select(op, "a5", specs)
+                    mlir = selected.specialize(**specs).mlir_text()
+                    self.assertIn("pto.vcmp", mlir)
+                    self.assertIn("pto.vsel", mlir)
 
     def test_tload_versions_render(self):
         cases = (
@@ -1332,6 +1372,101 @@ class TileLibCatalogTest(unittest.TestCase):
                 self.assertEqual(selected.name, expected_name)
                 self.assertIn(expected_op, selected.specialize(**specs).mlir_text())
 
+    def test_tmov_mat_moves_accept_cube_element_types(self):
+        # #1597: MAT -> LEFT/RIGHT moves feed every cube matmul, so they must
+        # cover the same element types as the loads and the matmul templates.
+        for dtype in ("i8", "f8e4m3", "f8e5m2", "hif8"):
+            for dst_space, expected_name, expected_op in (
+                ("left", "template_tmov_m2l", "pto.mte_l1_l0a"),
+                ("right", "template_tmov_m2r", "pto.mte_l1_l0b"),
+            ):
+                specs = {
+                    "src": TileSpec(
+                        shape=(16, 32), dtype=ScalarType(dtype), memory_space="mat"
+                    ),
+                    "dst": TileSpec(
+                        shape=(16, 32), dtype=ScalarType(dtype), memory_space=dst_space
+                    ),
+                }
+                with self.subTest(dtype=dtype, dst=dst_space):
+                    selected = select("pto.tmov", "a5", specs)
+                    self.assertEqual(selected.name, expected_name)
+                    self.assertIn(expected_op, selected.specialize(**specs).mlir_text())
+
+    def test_mat_load_accepts_cube_element_types(self):
+        # #1597: the GM -> MAT NZ load must cover every element type the cube
+        # matmul templates accept, not only f16/bf16/f32.
+        for dtype in ("i8", "f8e4m3", "f8e5m2", "hif8"):
+            nd2nz_specs = {
+                "src": ViewSpec(
+                    shape=(1, 1, 1, 8, 64),
+                    dtype=ScalarType(dtype),
+                    strides=(512, 512, 512, 64, 1),
+                ),
+                "dst": TileSpec(
+                    shape=(8, 64),
+                    dtype=ScalarType(dtype),
+                    memory_space="mat",
+                    b_layout="col_major",
+                    s_layout="row_major",
+                ),
+            }
+            dn2nz_specs = {
+                "src": ViewSpec(
+                    shape=(1, 1, 1, 64, 8),
+                    dtype=ScalarType(dtype),
+                    strides=(512, 512, 512, 1, 64),
+                ),
+                "dst": TileSpec(
+                    shape=(8, 64),
+                    dtype=ScalarType(dtype),
+                    memory_space="mat",
+                    b_layout="col_major",
+                    s_layout="row_major",
+                ),
+            }
+            for expected_name, specs in (
+                ("template_tload_gm_to_mat_nd2nz", nd2nz_specs),
+                ("template_tload_gm_to_mat_dn2nz", dn2nz_specs),
+            ):
+                with self.subTest(dtype=dtype, template=expected_name):
+                    selected = select("pto.tload", "a5", specs)
+                    self.assertEqual(selected.name, expected_name)
+                    self.assertIn(
+                        "pto.mte_gm_l1_frac", selected.specialize(**specs).mlir_text()
+                    )
+
+    def test_matmul_acc_accepts_integer_and_low_precision_dtypes(self):
+        # #1597: the acc forms consume the same LEFT/RIGHT/ACC tiles as
+        # pto.tmatmul, so they must cover the same element types.
+        cases = (
+            ("i32", "i8", "i8", "i32"),
+            ("f32", "f8e4m3", "f8e4m3", "f32"),
+            ("f32", "f8e4m3", "f8e5m2", "f32"),
+            ("f32", "f8e5m2", "f8e4m3", "f32"),
+            ("f32", "f8e5m2", "f8e5m2", "f32"),
+            ("f32", "hif8", "hif8", "f32"),
+        )
+        for acc_dtype, lhs_dtype, rhs_dtype, dst_dtype in cases:
+            specs = {
+                "acc_in": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(acc_dtype), memory_space="acc"
+                ),
+                "lhs": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(lhs_dtype), memory_space="left"
+                ),
+                "rhs": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(rhs_dtype), memory_space="right"
+                ),
+                "dst": TileSpec(
+                    shape=(16, 16), dtype=ScalarType(dst_dtype), memory_space="acc"
+                ),
+            }
+            with self.subTest(acc=acc_dtype, lhs=lhs_dtype, rhs=rhs_dtype):
+                selected = select("pto.tmatmul.acc", "a5", specs)
+                self.assertEqual(selected.name, "template_tmatmul_acc")
+                self.assertIn("pto.mad_acc", selected.specialize(**specs).mlir_text())
+
     def test_tstore_acc_uses_c0_aligned_source_stride(self):
         specs = {
             "src": TileSpec(
@@ -1354,7 +1489,7 @@ class TileLibCatalogTest(unittest.TestCase):
         mlir = selected.specialize(**specs).mlir_text()
 
         self.assertEqual(selected.name, "template_tstore_acc_to_gm_nz2nd")
-        self.assertIn("arith.constant 16 : i64", mlir)
+        self.assertIn("pto.constant 16 : i64", mlir)
         self.assertIn("pto.mte_l0c_gm", mlir)
 
     def test_tload_accepts_numeric_pad_value_metadata(self):

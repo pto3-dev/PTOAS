@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Element-wise template selection, traversal, and scope acceptance tests."""
 
 import ast
@@ -733,7 +735,7 @@ class TileLibElementwiseTest(unittest.TestCase):
                     )
                 ).mlir_text()
                 self.assertEqual(mlir.count("scf.for"), 1)
-                self.assertIn("arith.muli", mlir)
+                self.assertIn("pto.muli", mlir)
                 self.assertIn("iter_args", mlir)
                 self.assertNotIn("memref.subview", mlir)
 
@@ -1741,8 +1743,8 @@ class TileLibElementwiseTest(unittest.TestCase):
 
         self.assertEqual(selected.name, "template_tcmps")
         self.assertEqual(selected.metadata.loop_depth, 2)
-        self.assertIn("arith.constant 16 : index", mlir)
-        self.assertNotIn("arith.constant 64 : index", mlir)
+        self.assertIn("pto.constant 16 : index", mlir)
+        self.assertNotIn("pto.constant 64 : index", mlir)
 
     def test_select_family_registers_preferred_1d_and_fallback_2d(self):
         cases = (

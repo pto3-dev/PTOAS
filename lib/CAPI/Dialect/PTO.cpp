@@ -44,157 +44,172 @@ namespace {
                     static_cast<uint32_t>(CMirror),                             \
                 "PTOEnums.h mirror drifted from mlir::pto::" #CppEnum)
 
-PTO_ENUM_MIRROR_EQ(AddressSpace, Zero, MlirPTOAddressSpace_Zero);
-PTO_ENUM_MIRROR_EQ(AddressSpace, GM, MlirPTOAddressSpace_GM);
-PTO_ENUM_MIRROR_EQ(AddressSpace, MAT, MlirPTOAddressSpace_MAT);
-PTO_ENUM_MIRROR_EQ(AddressSpace, LEFT, MlirPTOAddressSpace_LEFT);
-PTO_ENUM_MIRROR_EQ(AddressSpace, RIGHT, MlirPTOAddressSpace_RIGHT);
-PTO_ENUM_MIRROR_EQ(AddressSpace, ACC, MlirPTOAddressSpace_ACC);
-PTO_ENUM_MIRROR_EQ(AddressSpace, VEC, MlirPTOAddressSpace_VEC);
-PTO_ENUM_MIRROR_EQ(AddressSpace, BIAS, MlirPTOAddressSpace_BIAS);
-PTO_ENUM_MIRROR_EQ(AddressSpace, SCALING, MlirPTOAddressSpace_SCALING);
+PTO_ENUM_MIRROR_EQ(AddressSpace, Zero, MlirPTOAddressSpace::Zero);
+PTO_ENUM_MIRROR_EQ(AddressSpace, GM, MlirPTOAddressSpace::GM);
+PTO_ENUM_MIRROR_EQ(AddressSpace, MAT, MlirPTOAddressSpace::MAT);
+PTO_ENUM_MIRROR_EQ(AddressSpace, LEFT, MlirPTOAddressSpace::LEFT);
+PTO_ENUM_MIRROR_EQ(AddressSpace, RIGHT, MlirPTOAddressSpace::RIGHT);
+PTO_ENUM_MIRROR_EQ(AddressSpace, ACC, MlirPTOAddressSpace::ACC);
+PTO_ENUM_MIRROR_EQ(AddressSpace, VEC, MlirPTOAddressSpace::VEC);
+PTO_ENUM_MIRROR_EQ(AddressSpace, BIAS, MlirPTOAddressSpace::BIAS);
+PTO_ENUM_MIRROR_EQ(AddressSpace, SCALING, MlirPTOAddressSpace::SCALING);
 
-PTO_ENUM_MIRROR_EQ(FenceScope, LocalMemory, MlirPTOFenceScope_LocalMemory);
-PTO_ENUM_MIRROR_EQ(FenceScope, GM, MlirPTOFenceScope_GM);
-PTO_ENUM_MIRROR_EQ(FenceScope, All, MlirPTOFenceScope_All);
+PTO_ENUM_MIRROR_EQ(FenceScope, LocalMemory, MlirPTOFenceScope::LocalMemory);
+PTO_ENUM_MIRROR_EQ(FenceScope, GM, MlirPTOFenceScope::GM);
+PTO_ENUM_MIRROR_EQ(FenceScope, All, MlirPTOFenceScope::All);
 
 PTO_ENUM_MIRROR_EQ(LoadCachePolicy, Default,
-                   MlirPTOLoadCachePolicy_Default);
+                   MlirPTOLoadCachePolicy::Default);
 PTO_ENUM_MIRROR_EQ(LoadCachePolicy, L2Bypass,
-                   MlirPTOLoadCachePolicy_L2Bypass);
+                   MlirPTOLoadCachePolicy::L2Bypass);
 
-PTO_ENUM_MIRROR_EQ(BLayout, RowMajor, MlirPTOBLayout_RowMajor);
-PTO_ENUM_MIRROR_EQ(BLayout, ColMajor, MlirPTOBLayout_ColMajor);
+PTO_ENUM_MIRROR_EQ(BLayout, RowMajor, MlirPTOBLayout::RowMajor);
+PTO_ENUM_MIRROR_EQ(BLayout, ColMajor, MlirPTOBLayout::ColMajor);
 
-PTO_ENUM_MIRROR_EQ(SLayout, NoneBox, MlirPTOSLayout_NoneBox);
-PTO_ENUM_MIRROR_EQ(SLayout, RowMajor, MlirPTOSLayout_RowMajor);
-PTO_ENUM_MIRROR_EQ(SLayout, ColMajor, MlirPTOSLayout_ColMajor);
+PTO_ENUM_MIRROR_EQ(SLayout, NoneBox, MlirPTOSLayout::NoneBox);
+PTO_ENUM_MIRROR_EQ(SLayout, RowMajor, MlirPTOSLayout::RowMajor);
+PTO_ENUM_MIRROR_EQ(SLayout, ColMajor, MlirPTOSLayout::ColMajor);
 
-PTO_ENUM_MIRROR_EQ(PadValue, Null, MlirPTOPadValue_Null);
-PTO_ENUM_MIRROR_EQ(PadValue, Zero, MlirPTOPadValue_Zero);
-PTO_ENUM_MIRROR_EQ(PadValue, Max, MlirPTOPadValue_Max);
-PTO_ENUM_MIRROR_EQ(PadValue, Min, MlirPTOPadValue_Min);
+PTO_ENUM_MIRROR_EQ(PadValue, Null, MlirPTOPadValue::Null);
+PTO_ENUM_MIRROR_EQ(PadValue, Zero, MlirPTOPadValue::Zero);
+PTO_ENUM_MIRROR_EQ(PadValue, Max, MlirPTOPadValue::Max);
+PTO_ENUM_MIRROR_EQ(PadValue, Min, MlirPTOPadValue::Min);
 
-PTO_ENUM_MIRROR_EQ(CompactMode, Null, MlirPTOCompactMode_Null);
-PTO_ENUM_MIRROR_EQ(CompactMode, Normal, MlirPTOCompactMode_Normal);
-PTO_ENUM_MIRROR_EQ(CompactMode, RowPlusOne, MlirPTOCompactMode_RowPlusOne);
+PTO_ENUM_MIRROR_EQ(CompactMode, Null, MlirPTOCompactMode::Null);
+PTO_ENUM_MIRROR_EQ(CompactMode, Normal, MlirPTOCompactMode::Normal);
+PTO_ENUM_MIRROR_EQ(CompactMode, RowPlusOne, MlirPTOCompactMode::RowPlusOne);
 
-PTO_ENUM_MIRROR_EQ(RoundMode, NONE, MlirPTORoundMode_NONE);
-PTO_ENUM_MIRROR_EQ(RoundMode, RINT, MlirPTORoundMode_RINT);
-PTO_ENUM_MIRROR_EQ(RoundMode, ROUND, MlirPTORoundMode_ROUND);
-PTO_ENUM_MIRROR_EQ(RoundMode, FLOOR, MlirPTORoundMode_FLOOR);
-PTO_ENUM_MIRROR_EQ(RoundMode, CEIL, MlirPTORoundMode_CEIL);
-PTO_ENUM_MIRROR_EQ(RoundMode, TRUNC, MlirPTORoundMode_TRUNC);
-PTO_ENUM_MIRROR_EQ(RoundMode, ODD, MlirPTORoundMode_ODD);
-PTO_ENUM_MIRROR_EQ(RoundMode, CAST_RINT, MlirPTORoundMode_CAST_RINT);
+PTO_ENUM_MIRROR_EQ(RoundMode, NONE, MlirPTORoundMode::NONE);
+PTO_ENUM_MIRROR_EQ(RoundMode, RINT, MlirPTORoundMode::RINT);
+PTO_ENUM_MIRROR_EQ(RoundMode, ROUND, MlirPTORoundMode::ROUND);
+PTO_ENUM_MIRROR_EQ(RoundMode, FLOOR, MlirPTORoundMode::FLOOR);
+PTO_ENUM_MIRROR_EQ(RoundMode, CEIL, MlirPTORoundMode::CEIL);
+PTO_ENUM_MIRROR_EQ(RoundMode, TRUNC, MlirPTORoundMode::TRUNC);
+PTO_ENUM_MIRROR_EQ(RoundMode, ODD, MlirPTORoundMode::ODD);
+PTO_ENUM_MIRROR_EQ(RoundMode, CAST_RINT, MlirPTORoundMode::CAST_RINT);
 
-PTO_ENUM_MIRROR_EQ(DivPrecision, Default, MlirPTODivPrecision_Default);
-PTO_ENUM_MIRROR_EQ(DivPrecision, HighPrecision, MlirPTODivPrecision_HighPrecision);
-PTO_ENUM_MIRROR_EQ(ExpPrecision, Default, MlirPTOExpPrecision_Default);
-PTO_ENUM_MIRROR_EQ(ExpPrecision, HighPrecision, MlirPTOExpPrecision_HighPrecision);
-PTO_ENUM_MIRROR_EQ(LogPrecision, Default, MlirPTOLogPrecision_Default);
-PTO_ENUM_MIRROR_EQ(LogPrecision, HighPrecision, MlirPTOLogPrecision_HighPrecision);
-PTO_ENUM_MIRROR_EQ(RecipPrecision, Default, MlirPTORecipPrecision_Default);
-PTO_ENUM_MIRROR_EQ(RecipPrecision, HighPrecision, MlirPTORecipPrecision_HighPrecision);
-PTO_ENUM_MIRROR_EQ(RemPrecision, Default, MlirPTORemPrecision_Default);
-PTO_ENUM_MIRROR_EQ(RemPrecision, HighPrecision, MlirPTORemPrecision_HighPrecision);
-PTO_ENUM_MIRROR_EQ(RsqrtPrecision, Default, MlirPTORsqrtPrecision_Default);
-PTO_ENUM_MIRROR_EQ(RsqrtPrecision, HighPrecision, MlirPTORsqrtPrecision_HighPrecision);
-PTO_ENUM_MIRROR_EQ(SqrtPrecision, Default, MlirPTOSqrtPrecision_Default);
-PTO_ENUM_MIRROR_EQ(SqrtPrecision, HighPrecision, MlirPTOSqrtPrecision_HighPrecision);
-PTO_ENUM_MIRROR_EQ(FmodPrecision, Default, MlirPTOFmodPrecision_Default);
-PTO_ENUM_MIRROR_EQ(FmodPrecision, HighPrecision, MlirPTOFmodPrecision_HighPrecision);
+PTO_ENUM_MIRROR_EQ(DivPrecision, Default, MlirPTODivPrecision::Default);
+PTO_ENUM_MIRROR_EQ(DivPrecision, HighPrecision, MlirPTODivPrecision::HighPrecision);
+PTO_ENUM_MIRROR_EQ(ExpPrecision, Default, MlirPTOExpPrecision::Default);
+PTO_ENUM_MIRROR_EQ(ExpPrecision, HighPrecision, MlirPTOExpPrecision::HighPrecision);
+PTO_ENUM_MIRROR_EQ(LogPrecision, Default, MlirPTOLogPrecision::Default);
+PTO_ENUM_MIRROR_EQ(LogPrecision, HighPrecision, MlirPTOLogPrecision::HighPrecision);
+PTO_ENUM_MIRROR_EQ(RecipPrecision, Default, MlirPTORecipPrecision::Default);
+PTO_ENUM_MIRROR_EQ(RecipPrecision, HighPrecision, MlirPTORecipPrecision::HighPrecision);
+PTO_ENUM_MIRROR_EQ(RemPrecision, Default, MlirPTORemPrecision::Default);
+PTO_ENUM_MIRROR_EQ(RemPrecision, HighPrecision, MlirPTORemPrecision::HighPrecision);
+PTO_ENUM_MIRROR_EQ(RsqrtPrecision, Default, MlirPTORsqrtPrecision::Default);
+PTO_ENUM_MIRROR_EQ(RsqrtPrecision, HighPrecision, MlirPTORsqrtPrecision::HighPrecision);
+PTO_ENUM_MIRROR_EQ(SqrtPrecision, Default, MlirPTOSqrtPrecision::Default);
+PTO_ENUM_MIRROR_EQ(SqrtPrecision, HighPrecision, MlirPTOSqrtPrecision::HighPrecision);
+PTO_ENUM_MIRROR_EQ(FmodPrecision, Default, MlirPTOFmodPrecision::Default);
+PTO_ENUM_MIRROR_EQ(FmodPrecision, HighPrecision, MlirPTOFmodPrecision::HighPrecision);
 
-PTO_ENUM_MIRROR_EQ(SaturationMode, ON, MlirPTOSaturationMode_ON);
-PTO_ENUM_MIRROR_EQ(SaturationMode, OFF, MlirPTOSaturationMode_OFF);
+PTO_ENUM_MIRROR_EQ(SaturationMode, ON, MlirPTOSaturationMode::ON);
+PTO_ENUM_MIRROR_EQ(SaturationMode, OFF, MlirPTOSaturationMode::OFF);
 
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_S, MlirPTOPIPE_PIPE_S);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_V, MlirPTOPIPE_PIPE_V);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_M, MlirPTOPIPE_PIPE_M);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE1, MlirPTOPIPE_PIPE_MTE1);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE2, MlirPTOPIPE_PIPE_MTE2);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE3, MlirPTOPIPE_PIPE_MTE3);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_ALL, MlirPTOPIPE_PIPE_ALL);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE4, MlirPTOPIPE_PIPE_MTE4);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE5, MlirPTOPIPE_PIPE_MTE5);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_V2, MlirPTOPIPE_PIPE_V2);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_FIX, MlirPTOPIPE_PIPE_FIX);
-PTO_ENUM_MIRROR_EQ(PIPE, VIRTUAL_PIPE_MTE2_L1A, MlirPTOPIPE_VIRTUAL_PIPE_MTE2_L1A);
-PTO_ENUM_MIRROR_EQ(PIPE, VIRTUAL_PIPE_MTE2_L1B, MlirPTOPIPE_VIRTUAL_PIPE_MTE2_L1B);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_NUM, MlirPTOPIPE_PIPE_NUM);
-PTO_ENUM_MIRROR_EQ(PIPE, PIPE_UNASSIGNED, MlirPTOPIPE_PIPE_UNASSIGNED);
+PTO_ENUM_MIRROR_EQ(FmatrixMode, FMATRIX_A_AUTO, MlirPTOFmatrixMode::FMATRIX_A_AUTO);
+PTO_ENUM_MIRROR_EQ(FmatrixMode, FMATRIX_B_AUTO, MlirPTOFmatrixMode::FMATRIX_B_AUTO);
+PTO_ENUM_MIRROR_EQ(FmatrixMode, FMATRIX_A_MANUAL, MlirPTOFmatrixMode::FMATRIX_A_MANUAL);
+PTO_ENUM_MIRROR_EQ(FmatrixMode, FMATRIX_B_MANUAL, MlirPTOFmatrixMode::FMATRIX_B_MANUAL);
 
-PTO_ENUM_MIRROR_EQ(Layout, ND, MlirPTOLayout_ND);
-PTO_ENUM_MIRROR_EQ(Layout, DN, MlirPTOLayout_DN);
-PTO_ENUM_MIRROR_EQ(Layout, NZ, MlirPTOLayout_NZ);
-PTO_ENUM_MIRROR_EQ(Layout, MX_A_ZZ, MlirPTOLayout_MX_A_ZZ);
-PTO_ENUM_MIRROR_EQ(Layout, MX_B_NN, MlirPTOLayout_MX_B_NN);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_S, MlirPTOPIPE::PIPE_S);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_V, MlirPTOPIPE::PIPE_V);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_M, MlirPTOPIPE::PIPE_M);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE1, MlirPTOPIPE::PIPE_MTE1);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE2, MlirPTOPIPE::PIPE_MTE2);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE3, MlirPTOPIPE::PIPE_MTE3);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_ALL, MlirPTOPIPE::PIPE_ALL);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE4, MlirPTOPIPE::PIPE_MTE4);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_MTE5, MlirPTOPIPE::PIPE_MTE5);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_V2, MlirPTOPIPE::PIPE_V2);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_FIX, MlirPTOPIPE::PIPE_FIX);
+PTO_ENUM_MIRROR_EQ(PIPE, VIRTUAL_PIPE_MTE2_L1A, MlirPTOPIPE::VIRTUAL_PIPE_MTE2_L1A);
+PTO_ENUM_MIRROR_EQ(PIPE, VIRTUAL_PIPE_MTE2_L1B, MlirPTOPIPE::VIRTUAL_PIPE_MTE2_L1B);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_NUM, MlirPTOPIPE::PIPE_NUM);
+PTO_ENUM_MIRROR_EQ(PIPE, PIPE_UNASSIGNED, MlirPTOPIPE::PIPE_UNASSIGNED);
 
-PTO_ENUM_MIRROR_EQ(AccToVecMode, SingleModeVec0, MlirPTOAccToVecMode_SingleModeVec0);
-PTO_ENUM_MIRROR_EQ(AccToVecMode, SingleModeVec1, MlirPTOAccToVecMode_SingleModeVec1);
-PTO_ENUM_MIRROR_EQ(AccToVecMode, DualModeSplitM, MlirPTOAccToVecMode_DualModeSplitM);
-PTO_ENUM_MIRROR_EQ(AccToVecMode, DualModeSplitN, MlirPTOAccToVecMode_DualModeSplitN);
+PTO_ENUM_MIRROR_EQ(Layout, ND, MlirPTOLayout::ND);
+PTO_ENUM_MIRROR_EQ(Layout, DN, MlirPTOLayout::DN);
+PTO_ENUM_MIRROR_EQ(Layout, NZ, MlirPTOLayout::NZ);
+PTO_ENUM_MIRROR_EQ(Layout, MX_A_ZZ, MlirPTOLayout::MX_A_ZZ);
+PTO_ENUM_MIRROR_EQ(Layout, MX_B_NN, MlirPTOLayout::MX_B_NN);
 
-PTO_ENUM_MIRROR_EQ(TInsertMode, SPLIT2, MlirPTOTInsertMode_SPLIT2);
-PTO_ENUM_MIRROR_EQ(TInsertMode, SPLIT4, MlirPTOTInsertMode_SPLIT4);
+PTO_ENUM_MIRROR_EQ(ConvLayout, NC1HWC0, MlirPTOConvLayout::NC1HWC0);
+PTO_ENUM_MIRROR_EQ(ConvLayout, NDC1HWC0, MlirPTOConvLayout::NDC1HWC0);
+PTO_ENUM_MIRROR_EQ(ConvLayout, FRACTAL_Z, MlirPTOConvLayout::FRACTAL_Z);
+PTO_ENUM_MIRROR_EQ(ConvLayout, FRACTAL_Z_3D, MlirPTOConvLayout::FRACTAL_Z_3D);
+PTO_ENUM_MIRROR_EQ(ConvLayout, NCHW, MlirPTOConvLayout::NCHW);
+PTO_ENUM_MIRROR_EQ(ConvLayout, NHWC, MlirPTOConvLayout::NHWC);
+PTO_ENUM_MIRROR_EQ(ConvLayout, GNCHW, MlirPTOConvLayout::GNCHW);
+PTO_ENUM_MIRROR_EQ(ConvLayout, GNC1HWC0, MlirPTOConvLayout::GNC1HWC0);
+PTO_ENUM_MIRROR_EQ(ConvLayout, NCDHW, MlirPTOConvLayout::NCDHW);
 
-PTO_ENUM_MIRROR_EQ(ReluPreMode, NoRelu, MlirPTOReluPreMode_NoRelu);
-PTO_ENUM_MIRROR_EQ(ReluPreMode, NormalRelu, MlirPTOReluPreMode_NormalRelu);
-PTO_ENUM_MIRROR_EQ(ReluPreMode, ScalarRelu, MlirPTOReluPreMode_ScalarRelu);
-PTO_ENUM_MIRROR_EQ(ReluPreMode, VectorRelu, MlirPTOReluPreMode_VectorRelu);
-PTO_ENUM_MIRROR_EQ(ReluPreMode, Pwl, MlirPTOReluPreMode_Pwl);
+PTO_ENUM_MIRROR_EQ(AccToVecMode, SingleModeVec0, MlirPTOAccToVecMode::SingleModeVec0);
+PTO_ENUM_MIRROR_EQ(AccToVecMode, SingleModeVec1, MlirPTOAccToVecMode::SingleModeVec1);
+PTO_ENUM_MIRROR_EQ(AccToVecMode, DualModeSplitM, MlirPTOAccToVecMode::DualModeSplitM);
+PTO_ENUM_MIRROR_EQ(AccToVecMode, DualModeSplitN, MlirPTOAccToVecMode::DualModeSplitN);
 
-PTO_ENUM_MIRROR_EQ(AtomicType, AtomicNone, MlirPTOAtomicType_AtomicNone);
-PTO_ENUM_MIRROR_EQ(AtomicType, AtomicAdd, MlirPTOAtomicType_AtomicAdd);
+PTO_ENUM_MIRROR_EQ(TInsertMode, SPLIT2, MlirPTOTInsertMode::SPLIT2);
+PTO_ENUM_MIRROR_EQ(TInsertMode, SPLIT4, MlirPTOTInsertMode::SPLIT4);
 
-PTO_ENUM_MIRROR_EQ(NotifyOp, AtomicAdd, MlirPTONotifyOp_AtomicAdd);
-PTO_ENUM_MIRROR_EQ(NotifyOp, Set, MlirPTONotifyOp_Set);
+PTO_ENUM_MIRROR_EQ(ReluPreMode, NoRelu, MlirPTOReluPreMode::NoRelu);
+PTO_ENUM_MIRROR_EQ(ReluPreMode, NormalRelu, MlirPTOReluPreMode::NormalRelu);
+PTO_ENUM_MIRROR_EQ(ReluPreMode, ScalarRelu, MlirPTOReluPreMode::ScalarRelu);
+PTO_ENUM_MIRROR_EQ(ReluPreMode, VectorRelu, MlirPTOReluPreMode::VectorRelu);
+PTO_ENUM_MIRROR_EQ(ReluPreMode, Pwl, MlirPTOReluPreMode::Pwl);
 
-PTO_ENUM_MIRROR_EQ(WaitCmp, EQ, MlirPTOWaitCmp_EQ);
-PTO_ENUM_MIRROR_EQ(WaitCmp, NE, MlirPTOWaitCmp_NE);
-PTO_ENUM_MIRROR_EQ(WaitCmp, GT, MlirPTOWaitCmp_GT);
-PTO_ENUM_MIRROR_EQ(WaitCmp, GE, MlirPTOWaitCmp_GE);
-PTO_ENUM_MIRROR_EQ(WaitCmp, LT, MlirPTOWaitCmp_LT);
-PTO_ENUM_MIRROR_EQ(WaitCmp, LE, MlirPTOWaitCmp_LE);
+PTO_ENUM_MIRROR_EQ(AtomicType, AtomicNone, MlirPTOAtomicType::AtomicNone);
+PTO_ENUM_MIRROR_EQ(AtomicType, AtomicAdd, MlirPTOAtomicType::AtomicAdd);
 
-PTO_ENUM_MIRROR_EQ(ReduceOp, Sum, MlirPTOReduceOp_Sum);
-PTO_ENUM_MIRROR_EQ(ReduceOp, Max, MlirPTOReduceOp_Max);
-PTO_ENUM_MIRROR_EQ(ReduceOp, Min, MlirPTOReduceOp_Min);
+PTO_ENUM_MIRROR_EQ(NotifyOp, AtomicAdd, MlirPTONotifyOp::AtomicAdd);
+PTO_ENUM_MIRROR_EQ(NotifyOp, Set, MlirPTONotifyOp::Set);
 
-PTO_ENUM_MIRROR_EQ(SyncOpType, TLOAD, MlirPTOSyncOpType_TLOAD);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TSTORE_ACC, MlirPTOSyncOpType_TSTORE_ACC);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TSTORE_VEC, MlirPTOSyncOpType_TSTORE_VEC);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2L, MlirPTOSyncOpType_TMOV_M2L);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2S, MlirPTOSyncOpType_TMOV_M2S);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2B, MlirPTOSyncOpType_TMOV_M2B);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2V, MlirPTOSyncOpType_TMOV_M2V);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_V2M, MlirPTOSyncOpType_TMOV_V2M);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TMATMUL, MlirPTOSyncOpType_TMATMUL);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TVEC, MlirPTOSyncOpType_TVEC);
-PTO_ENUM_MIRROR_EQ(SyncOpType, TVECWAIT_EVENT, MlirPTOSyncOpType_TVECWAIT_EVENT);
+PTO_ENUM_MIRROR_EQ(WaitCmp, EQ, MlirPTOWaitCmp::EQ);
+PTO_ENUM_MIRROR_EQ(WaitCmp, NE, MlirPTOWaitCmp::NE);
+PTO_ENUM_MIRROR_EQ(WaitCmp, GT, MlirPTOWaitCmp::GT);
+PTO_ENUM_MIRROR_EQ(WaitCmp, GE, MlirPTOWaitCmp::GE);
+PTO_ENUM_MIRROR_EQ(WaitCmp, LT, MlirPTOWaitCmp::LT);
+PTO_ENUM_MIRROR_EQ(WaitCmp, LE, MlirPTOWaitCmp::LE);
 
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID0, MlirPTOEVENT_EVENT_ID0);
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID1, MlirPTOEVENT_EVENT_ID1);
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID2, MlirPTOEVENT_EVENT_ID2);
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID3, MlirPTOEVENT_EVENT_ID3);
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID4, MlirPTOEVENT_EVENT_ID4);
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID5, MlirPTOEVENT_EVENT_ID5);
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID6, MlirPTOEVENT_EVENT_ID6);
-PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID7, MlirPTOEVENT_EVENT_ID7);
+PTO_ENUM_MIRROR_EQ(ReduceOp, Sum, MlirPTOReduceOp::Sum);
+PTO_ENUM_MIRROR_EQ(ReduceOp, Max, MlirPTOReduceOp::Max);
+PTO_ENUM_MIRROR_EQ(ReduceOp, Min, MlirPTOReduceOp::Min);
 
-PTO_ENUM_MIRROR_EQ(QuantType, INT8_SYM, MlirPTOQuantType_INT8_SYM);
-PTO_ENUM_MIRROR_EQ(QuantType, INT8_ASYM, MlirPTOQuantType_INT8_ASYM);
-PTO_ENUM_MIRROR_EQ(QuantType, MXFP8, MlirPTOQuantType_MXFP8);
-PTO_ENUM_MIRROR_EQ(QuantType, MXFP4_E2M1, MlirPTOQuantType_MXFP4_E2M1);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TLOAD, MlirPTOSyncOpType::TLOAD);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TSTORE_ACC, MlirPTOSyncOpType::TSTORE_ACC);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TSTORE_VEC, MlirPTOSyncOpType::TSTORE_VEC);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2L, MlirPTOSyncOpType::TMOV_M2L);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2S, MlirPTOSyncOpType::TMOV_M2S);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2B, MlirPTOSyncOpType::TMOV_M2B);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_M2V, MlirPTOSyncOpType::TMOV_M2V);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TMOV_V2M, MlirPTOSyncOpType::TMOV_V2M);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TMATMUL, MlirPTOSyncOpType::TMATMUL);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TVEC, MlirPTOSyncOpType::TVEC);
+PTO_ENUM_MIRROR_EQ(SyncOpType, TVECWAIT_EVENT, MlirPTOSyncOpType::TVECWAIT_EVENT);
 
-PTO_ENUM_MIRROR_EQ(QuantScaleAlg, OCP, MlirPTOQuantScaleAlg_OCP);
-PTO_ENUM_MIRROR_EQ(QuantScaleAlg, NV, MlirPTOQuantScaleAlg_NV);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID0, MlirPTOEVENT::EVENT_ID0);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID1, MlirPTOEVENT::EVENT_ID1);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID2, MlirPTOEVENT::EVENT_ID2);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID3, MlirPTOEVENT::EVENT_ID3);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID4, MlirPTOEVENT::EVENT_ID4);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID5, MlirPTOEVENT::EVENT_ID5);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID6, MlirPTOEVENT::EVENT_ID6);
+PTO_ENUM_MIRROR_EQ(EVENT, EVENT_ID7, MlirPTOEVENT::EVENT_ID7);
 
-PTO_ENUM_MIRROR_EQ(MxGroupAxis, Axis0, MlirPTOMxGroupAxis_Axis0);
-PTO_ENUM_MIRROR_EQ(MxGroupAxis, Axis1, MlirPTOMxGroupAxis_Axis1);
+PTO_ENUM_MIRROR_EQ(QuantType, INT8_SYM, MlirPTOQuantType::INT8_SYM);
+PTO_ENUM_MIRROR_EQ(QuantType, INT8_ASYM, MlirPTOQuantType::INT8_ASYM);
+PTO_ENUM_MIRROR_EQ(QuantType, MXFP8, MlirPTOQuantType::MXFP8);
+PTO_ENUM_MIRROR_EQ(QuantType, MXFP4_E2M1, MlirPTOQuantType::MXFP4_E2M1);
 
-PTO_ENUM_MIRROR_EQ(VecStoreMode, ND, MlirPTOVecStoreMode_ND);
-PTO_ENUM_MIRROR_EQ(VecStoreMode, NZ, MlirPTOVecStoreMode_NZ);
+PTO_ENUM_MIRROR_EQ(QuantScaleAlg, OCP, MlirPTOQuantScaleAlg::OCP);
+PTO_ENUM_MIRROR_EQ(QuantScaleAlg, NV, MlirPTOQuantScaleAlg::NV);
+
+PTO_ENUM_MIRROR_EQ(MxGroupAxis, Axis0, MlirPTOMxGroupAxis::Axis0);
+PTO_ENUM_MIRROR_EQ(MxGroupAxis, Axis1, MlirPTOMxGroupAxis::Axis1);
+
+PTO_ENUM_MIRROR_EQ(VecStoreMode, ND, MlirPTOVecStoreMode::ND);
+PTO_ENUM_MIRROR_EQ(VecStoreMode, NZ, MlirPTOVecStoreMode::NZ);
 
 #undef PTO_ENUM_MIRROR_EQ
 } // namespace
@@ -538,6 +553,57 @@ MlirType mlirPTOTileBufTypeGetWithValidShapeAndConfig(MlirContext ctx,
   return wrap(ty);
 }
 
+bool mlirPTOTypeIsAConvTileBufType(MlirType type) {
+  return mlir::isa<mlir::pto::ConvTileBufType>(unwrap(type));
+}
+
+MlirType mlirPTOConvTileBufTypeGet(MlirContext ctx, intptr_t rank,
+                                const int64_t *shape, MlirType elementType,
+                                MlirAttribute bufferSize,
+                                MlirAttribute memorySpace,
+                                MlirAttribute layout) {
+  MLIRContext *c = unwrap(ctx);
+  auto shp = llvm::ArrayRef<int64_t>(shape, rank);
+  auto bufferSizeAttr = mlir::dyn_cast<mlir::IntegerAttr>(unwrap(bufferSize));
+  auto memorySpaceAttr =
+      mlir::dyn_cast<mlir::pto::AddressSpaceAttr>(unwrap(memorySpace));
+  auto layoutAttr = mlir::dyn_cast<mlir::pto::ConvLayoutAttr>(unwrap(layout));
+  if (!bufferSizeAttr || !memorySpaceAttr || !layoutAttr) {
+    return MlirType{nullptr};
+  }
+
+  // getChecked runs ConvTileBufType::verify, so rank/layout/memory-space
+  // consistency holds for CAPI and Python-built types too; on failure the
+  // diagnostics go to the UnknownLoc and the returned type is null. The
+  // conv geometry config is not part of the type; it rides on the
+  // allocating op.
+  auto ty = mlir::pto::ConvTileBufType::getChecked(
+      [c]() { return mlir::emitError(mlir::UnknownLoc::get(c)); }, c, shp,
+      unwrap(elementType), bufferSizeAttr, memorySpaceAttr, layoutAttr);
+  return wrap(ty);
+}
+
+intptr_t mlirPTOConvTileBufTypeGetRank(MlirType type) {
+  return mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getRank();
+}
+
+MlirType mlirPTOConvTileBufTypeGetElementType(MlirType type) {
+  return wrap(mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getElementType());
+}
+
+const int64_t *mlirPTOConvTileBufTypeGetShape(MlirType type,
+                                           intptr_t *numDimsOut) {
+  static thread_local llvm::SmallVector<int64_t, 8> shape;
+  auto dims = mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getShape();
+  shape.assign(dims.begin(), dims.end());
+  *numDimsOut = static_cast<intptr_t>(shape.size());
+  return shape.data();
+}
+
+MlirAttribute mlirPTOConvTileBufTypeGetLayout(MlirType type) {
+  return wrap(mlir::cast<mlir::pto::ConvTileBufType>(unwrap(type)).getLayout());
+}
+
 bool mlirPTOAttrIsABLayoutAttr(MlirAttribute attr) {
   return mlir::isa<mlir::pto::BLayoutAttr>(unwrap(attr));
 }
@@ -622,6 +688,7 @@ DEFINE_PTO_ENUM_ATTR_CAPI(RemPrecision, RemPrecisionAttr, RemPrecision)
 DEFINE_PTO_ENUM_ATTR_CAPI(RsqrtPrecision, RsqrtPrecisionAttr, RsqrtPrecision)
 DEFINE_PTO_ENUM_ATTR_CAPI(SqrtPrecision, SqrtPrecisionAttr, SqrtPrecision)
 DEFINE_PTO_ENUM_ATTR_CAPI(FmodPrecision, FmodPrecisionAttr, FmodPrecision)
+DEFINE_PTO_ENUM_ATTR_CAPI(FmatrixMode, FmatrixModeAttr, FmatrixMode)
 
 #undef DEFINE_PTO_ENUM_ATTR_CAPI
 
@@ -668,6 +735,21 @@ bool mlirPTOAttrIsALayoutAttr(MlirAttribute attr) {
 int32_t mlirPTOLayoutAttrGetValue(MlirAttribute attr) {
   auto a = mlir::cast<mlir::pto::LayoutAttr>(unwrap(attr));
   return static_cast<int32_t>(a.getLayout());
+}
+
+MlirAttribute mlirPTOConvLayoutAttrGet(MlirContext ctx, int32_t value) {
+  auto *c = unwrap(ctx);
+  auto v = static_cast<mlir::pto::ConvLayout>(value);
+  return wrap(mlir::pto::ConvLayoutAttr::get(c, v));
+}
+
+bool mlirPTOAttrIsAConvLayoutAttr(MlirAttribute attr) {
+  return mlir::isa<mlir::pto::ConvLayoutAttr>(unwrap(attr));
+}
+
+int32_t mlirPTOConvLayoutAttrGetValue(MlirAttribute attr) {
+  auto a = mlir::cast<mlir::pto::ConvLayoutAttr>(unwrap(attr));
+  return static_cast<int32_t>(a.getValue());
 }
 
 MlirAttribute mlirPTOSyncOpTypeAttrGet(MlirContext ctx, int32_t value) {
@@ -946,6 +1028,14 @@ static mlir::pto::CompactModeAttr toCompactModeAttr(mlir::MLIRContext *c,
   return {};
 }
 
+static mlir::IntegerAttr toI32IntegerAttr(mlir::Attribute a) {
+  auto intAttr = mlir::dyn_cast<mlir::IntegerAttr>(a);
+  if (!intAttr || !intAttr.getType().isSignlessInteger(kI32BitWidth)) {
+    return {};
+  }
+  return intAttr;
+}
+
 bool mlirPTOAttrIsACompactModeAttr(MlirAttribute attr) {
   return mlir::isa<mlir::pto::CompactModeAttr>(unwrap(attr));
 }
@@ -1096,6 +1186,61 @@ MlirAttribute mlirPTOTileBufConfigAttrGetWithCompactMode(
   }
 
   return wrap(mlir::pto::TileBufConfigAttr::get(c, blA, slA, sz, pvA, cmA));
+}
+
+bool mlirPTOAttrIsAConvTileConfigAttr(MlirAttribute attr) {
+  return mlir::isa<mlir::pto::ConvTileConfigAttr>(unwrap(attr));
+}
+
+MlirAttribute mlirPTOConvTileConfigAttrGetDefault(MlirContext ctx) {
+  auto *c = unwrap(ctx);
+  return wrap(mlir::pto::ConvTileConfigAttr::getDefault(c));
+}
+
+MlirAttribute mlirPTOConvTileConfigAttrGet(
+    MlirContext ctx, MlirAttribute fmapH, MlirAttribute fmapW,
+    intptr_t padListSize, const int64_t *padList, MlirAttribute filterH,
+    MlirAttribute filterW, MlirAttribute dilationH, MlirAttribute dilationW,
+    MlirAttribute strideH, MlirAttribute strideW, MlirAttribute padValue,
+    MlirAttribute channelSize, MlirAttribute repeatStride,
+    MlirAttribute repeatTime, MlirAttribute repeatMode, MlirAttribute dstStride,
+    MlirAttribute dstMposition, MlirAttribute transpose) {
+  auto *c = unwrap(ctx);
+  auto fmapHAttr = toI32IntegerAttr(unwrap(fmapH));
+  auto fmapWAttr = toI32IntegerAttr(unwrap(fmapW));
+  auto filterHAttr = toI32IntegerAttr(unwrap(filterH));
+  auto filterWAttr = toI32IntegerAttr(unwrap(filterW));
+  auto dilationHAttr = toI32IntegerAttr(unwrap(dilationH));
+  auto dilationWAttr = toI32IntegerAttr(unwrap(dilationW));
+  auto strideHAttr = toI32IntegerAttr(unwrap(strideH));
+  auto strideWAttr = toI32IntegerAttr(unwrap(strideW));
+  auto channelSizeAttr = toI32IntegerAttr(unwrap(channelSize));
+  auto repeatStrideAttr = toI32IntegerAttr(unwrap(repeatStride));
+  auto repeatTimeAttr = toI32IntegerAttr(unwrap(repeatTime));
+  auto repeatModeAttr = toI32IntegerAttr(unwrap(repeatMode));
+  auto dstStrideAttr = toI32IntegerAttr(unwrap(dstStride));
+  auto dstMpositionAttr = toI32IntegerAttr(unwrap(dstMposition));
+  auto transposeAttr = mlir::dyn_cast<mlir::BoolAttr>(unwrap(transpose));
+  if (!fmapHAttr || !fmapWAttr || !filterHAttr || !filterWAttr ||
+      !dilationHAttr || !dilationWAttr || !strideHAttr || !strideWAttr ||
+      !channelSizeAttr || !repeatStrideAttr || !repeatTimeAttr ||
+      !repeatModeAttr || !dstStrideAttr || !dstMpositionAttr ||
+      !transposeAttr) {
+    return MlirAttribute{nullptr};
+  }
+
+  auto pads =
+      llvm::ArrayRef<int64_t>(padList, static_cast<size_t>(padListSize));
+  // getChecked runs ConvTileConfigAttr::verify, so field ranges hold for
+  // CAPI/Python-built configs too; a failure emits at the unknown location
+  // and returns a null attribute.
+  auto attr = mlir::pto::ConvTileConfigAttr::getChecked(
+      [c]() { return mlir::emitError(mlir::UnknownLoc::get(c)); }, c, fmapHAttr,
+      fmapWAttr, pads, filterHAttr, filterWAttr, dilationHAttr, dilationWAttr,
+      strideHAttr, strideWAttr, unwrap(padValue), channelSizeAttr,
+      repeatStrideAttr, repeatTimeAttr, repeatModeAttr, dstStrideAttr,
+      dstMpositionAttr, transposeAttr);
+  return wrap(attr);
 }
 
 MlirType mlirPTOGMTypeGet(MlirContext ctx, intptr_t rank, const int64_t *shape,

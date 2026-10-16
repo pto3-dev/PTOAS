@@ -98,8 +98,8 @@ private:
 
   /// 合并两个分支的同步状态 (Intersection)
   void MergeAlreadySync(SyncRecordList &syncRecordList,
-                        const SyncRecordList &syncRecordIfList,
-                        const SyncRecordList &syncRecordElseList);
+                              const SyncRecordList &syncRecordIfList,
+                              const SyncRecordList &syncRecordElseList) const;
  
   // --- Dependency & Sync Insertion ---
 
@@ -131,14 +131,25 @@ private:
                            const CompoundInstanceElement *frontCompound,
                            DepBaseMemInfoPairVec &depBaseMemInfosVec,
                            const std::optional<unsigned> &forEndIndex);
+  
+  /// Insert a PIPE_BARRIER sync for same-pipe dependencies
+  void InsertPipeBarrierSync(const CompoundInstanceElement *nowCompound,
+                             const CompoundInstanceElement *frontCompound,
+                             const std::optional<unsigned> &forEndIndex);
+  
+  /// Insert a SET_EVENT / WAIT_EVENT sync pair for cross-pipe dependencies
+  void InsertCrossPipeEventSync(const CompoundInstanceElement *nowCompound,
+                                const CompoundInstanceElement *frontCompound,
+                                DepBaseMemInfoPairVec &depBaseMemInfosVec,
+                                const std::optional<unsigned> &forEndIndex);
  
   // --- Utility Methods ---
  
   /// 检查是否已经同步过 (Transitive Dependency Elimination)
   bool isAlreadySync(const CompoundInstanceElement *nowCompound,
-                     CompoundInstanceElement *frontCompound,
-                     SyncRecordList &syncRecordList,
-                     unsigned recordListIndex);
+                           const CompoundInstanceElement *frontCompound,
+                           SyncRecordList &syncRecordList,
+                           unsigned recordListIndex) const;
 
   bool CanPrunePipeVBarrier(
       const CompoundInstanceElement *nowCompound,
@@ -149,13 +160,13 @@ private:
   /// 更新 SyncRecord (当插入新同步后)
   void UpdateAlreadySync(const SyncOps &syncVector,
                          SyncRecordList &syncRecordList,
-                         const PipelineType nowPipeValue);
+                         const PipelineType nowPipeValue) const;
                             
   void UpdateSyncRecordInfo(const CompoundInstanceElement *frontCompound,
                             SyncRecordList &syncRecordList);
  
   void UpdateSyncRecord(const SyncOperation *sync, SyncRecord &syncRecord,
-                        PipelineType nowPipeValue);
+                              PipelineType nowPipeValue) const;
                         
   void InsertLastPipeAll();
   
@@ -166,10 +177,10 @@ private:
                             bool isBackwardDep) const;
  
   /// 获取依赖对涉及的 Event ID 数量 (用于 Multi-Buffer 分析)
-  int GetEventIdNum(const DepBaseMemInfoPairVec &depBaseMemInfosVec);
+  int GetEventIdNum(const DepBaseMemInfoPairVec &depBaseMemInfosVec) const;
  
   /// 辅助函数：获取所有涉及的 Buffer (用于 LCA 计算，虽然现在简化了，保留接口)
-  SmallVector<Value> GetMemInfoBuffers(const DepBaseMemInfoPairVec &depBaseMemInfosVec);
+  SmallVector<Value> GetMemInfoBuffers(const DepBaseMemInfoPairVec &depBaseMemInfosVec) const;
  
   /// 判断两个操作是否构成GM的读写冲突
   bool IsGMHazard(const CompoundInstanceElement *nowCompound,

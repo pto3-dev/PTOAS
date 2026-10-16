@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vpto-optimize-vcvt -cse | FileCheck %s
+
+module {
+  func.func @fold_u32_to_u16_extraction(%input: !pto.vreg<64xui32>)
+      -> !pto.vreg<128xui16> {
+    %mask32 = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+    %mask16 = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+    %c16 = arith.constant 16 : i16
+    %cffff = arith.constant 65535 : i32
+    %cffff_ui32 = builtin.unrealized_conversion_cast %cffff : i32 to ui32
+    %vffff = pto.vbr %cffff_ui32 : ui32 -> !pto.vreg<64xui32>
+
+    %high = pto.vshrs %input, %c16, %mask32
+        : !pto.vreg<64xui32>, i16, !pto.mask<b32> -> !pto.vreg<64xui32>
+    %low = pto.vand %input, %vffff, %mask32
+        : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+    %high16 = pto.vcvt %high, %mask32 {part = "EVEN", sat = "NOSAT"}
+        : !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<128xui16>
+    %low16 = pto.vcvt %low, %mask32 {part = "EVEN", sat = "NOSAT"}
+        : !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<128xui16>
+    %result = pto.vor %high16, %low16, %mask16
+        : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+    return %result : !pto.vreg<128xui16>
+  }
+}
+
+// CHECK-LABEL: func.func @fold_u32_to_u16_extraction
+// CHECK: %[[PACKED:.*]] = pto.vbitcast %arg0
+// CHECK: %[[LOW:.*]], %[[HIGH:.*]] = pto.vdintlv %[[PACKED]], %[[PACKED]]
+// CHECK-NOT: pto.vdintlv
+// CHECK: pto.vor %[[HIGH]], %[[LOW]]
+// CHECK-NOT: pto.vshrs
+// CHECK-NOT: pto.vand
+// CHECK-NOT: pto.vcvt

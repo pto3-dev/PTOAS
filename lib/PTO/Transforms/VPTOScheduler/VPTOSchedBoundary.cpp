@@ -25,21 +25,26 @@
 using namespace mlir;
 using namespace mlir::pto;
 
+constexpr unsigned kSchedRepresentativeInlineCapacity = 2;
+constexpr unsigned kSchedUpdateMapInlineCapacity = 8;
+constexpr unsigned kSchedDepthMultiplier = 2;
+
 struct mlir::pto::VPTOPressureEvaluationCache {
   SmallVector<VPTORegPressureEvaluation> evaluations;
   SmallVector<uint8_t> valid;
-  DenseMap<Value, SmallVector<unsigned, 2>> usersByRepresentative;
+  DenseMap<Value, SmallVector<unsigned, kSchedRepresentativeInlineCapacity>> usersByRepresentative;
 };
 
 namespace {
 
 static uint64_t getTreeOperationWork(size_t bucketCount) {
+  constexpr size_t kMinBucketsForTree = 2;
   static_assert(sizeof(size_t) <= sizeof(uint64_t));
-  if (bucketCount <= 1) {
+  if (bucketCount < kMinBucketsForTree) {
     return 1;
   }
   uint64_t depth = llvm::Log2_64_Ceil(static_cast<uint64_t>(bucketCount));
-  return 2 * depth + 1;
+  return kSchedDepthMultiplier * depth + 1;
 }
 
 struct DependencyUpdate {
@@ -56,7 +61,7 @@ collectDependencyUpdates(VPTOSUnit &unit, VPTOSchedDirection direction,
   ArrayRef<VPTOSchedEdge *> edges = direction == VPTOSchedDirection::Top
                                         ? unit.getSuccessors()
                                         : unit.getPredecessors();
-  llvm::SmallDenseMap<VPTOSUnit *, size_t, 8> updateByUnit;
+  llvm::SmallDenseMap<VPTOSUnit *, size_t, kSchedUpdateMapInlineCapacity> updateByUnit;
   for (VPTOSchedEdge *edge : edges) {
     if (!budget.consume()) {
       detail = "work budget exhausted while inspecting dependencies";
@@ -260,7 +265,7 @@ VPTOSchedBoundary::evaluatePressure(const VPTOSUnit &unit) const {
   if (direction != VPTOSchedDirection::Top ||
       id >= pressureEvaluationCache->valid.size())
     return pressureTracker->evaluate(unit);
-  if (!pressureEvaluationCache->valid[id]) {
+  if (pressureEvaluationCache->valid[id] == 0) {
     pressureEvaluationCache->evaluations[id] =
         pressureTracker->evaluate(unit);
     pressureEvaluationCache->valid[id] = 1;
@@ -331,7 +336,7 @@ void VPTOSchedBoundary::insertPending(VPTOSUnit *unit, unsigned readyCycle) {
   readyCycles[id] = readyCycle;
   SmallVector<VPTOSUnit *> &bucket = pendingByCycle[readyCycle];
   auto position = llvm::lower_bound(
-      bucket, unit, [](VPTOSUnit *lhs, VPTOSUnit *rhs) {
+      bucket, unit, [](const VPTOSUnit *lhs, const VPTOSUnit *rhs) {
         return lhs->getOriginalIndex() < rhs->getOriginalIndex();
       });
   bucket.insert(position, unit);
@@ -405,7 +410,7 @@ LogicalResult VPTOSchedBoundary::commit(VPTOSUnit &unit, unsigned issueCycle,
     return mlir::failure();
   }
 
-  SmallVector<DependencyUpdate, 8> updates;
+  SmallVector<DependencyUpdate, kSchedUpdateMapInlineCapacity> updates;
   if (failed(collectDependencyUpdates(unit, direction, issueCycle, budget,
                                       updates, detail))) {
     return mlir::failure();

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -18,7 +19,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from common import auto_main, golden_output_case
-from ptodsl import pto, scalar
+from ptodsl import pto
 
 
 LANES = 32
@@ -31,10 +32,10 @@ def _sincos_body(
     cos_out: pto.ptr(pto.f32, "gm"),
 ):
     tid = pto.get_tid_x()
-    idx = scalar.index_cast(tid)
-    value = scalar.load(inp, idx)
-    scalar.store(pto.sin(value), sin_out, idx)
-    scalar.store(pto.cos(value), cos_out, idx)
+    idx = tid
+    value = pto.load(inp, idx)
+    pto.store(pto.sin(value), sin_out, idx)
+    pto.store(pto.cos(value), cos_out, idx)
 
 
 @pto.jit(

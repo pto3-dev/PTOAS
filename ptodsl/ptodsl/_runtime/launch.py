@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Launch handles and ctypes dispatch for compiled PTODSL kernels."""
 
 from __future__ import annotations
@@ -14,7 +16,6 @@ from typing import TYPE_CHECKING
 
 from .._kernel_signature import DeviceParameterSpec, RuntimeScalarParameterSpec
 from .._types import _resolve
-from .native_build import build_native_library
 
 from ptoas.mlir.ir import BF16Type, Context, F16Type, F32Type, IndexType, IntegerType
 
@@ -124,14 +125,10 @@ class LaunchHandle:
         if self._launch_fn is not None:
             return
 
-        lib_path, launch_symbol = build_native_library(
-            py_name=self._compiled._py_name,
-            module_spec=self._compiled._module_spec,
-            kernel_signature=self._compiled._kernel_signature,
-            mlir_text=self._compiled.mlir_text(),
-            specialization_key=self._compiled.specialization_key,
-        )
-        lib = ctypes.CDLL(str(lib_path))
+        # The compiled handle owns the loaded library: every launch handle for
+        # one specialization shares a single build, even with the optional
+        # persistent cache disabled (CompiledKernelHandle.native_library).
+        lib, launch_symbol = self._compiled.native_library()
         fn = getattr(lib, launch_symbol)
         fn.argtypes = _launch_argtypes(self._compiled._kernel_signature)
         fn.restype = None

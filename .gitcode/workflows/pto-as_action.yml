@@ -27,6 +27,7 @@ env:
   obs_path: "${{ env.org_name }}/${{ env.repo_name }}/ci/package/${{ env.MERGE_ID }}"
   obs_smoke_path: "${{ env.obs_path }}/presmoke/2"
   online: ${{ vars.APPLY_LABEL }}
+  CANN_HOME: ${{ vars.CANN_HOME || '/home/jenkins/Ascend/cann' }}
 
 stages:
   stage1:
@@ -86,10 +87,16 @@ stages:
               token: ${{ secrets.GIT_TOKEN }}
           - name: Build and test PTOAS
             timeout-minutes: 180
-            run: |
-              set -euo pipefail
-              bash "${{ steps.process_checkout.outputs.path }}/.gitcode/scripts/build_and_test.sh" \
-                "${{ steps.process_checkout.outputs.path }}"
+            uses: build-accelerate
+            with:
+              command: |
+                set -euo pipefail
+                export WORKSPACE="${{ steps.process_checkout.outputs.path }}"
+                cd "${WORKSPACE}"
+                export CMAKE_C_COMPILER_LAUNCHER=/tmp/codearts/cloudcache/xcache
+                export CMAKE_CXX_COMPILER_LAUNCHER=/tmp/codearts/cloudcache/xcache
+                BuildAccelerate bash .gitcode/scripts/build_and_test.sh "${WORKSPACE}"
+              AC_SERVER_IP: ${{ vars.AC_SERVER_IP }}
         runs-on:
           - self-hosted
           - arch=x64
@@ -102,6 +109,101 @@ stages:
         with:
           precommit_image_version: ${{ jobs.JOB_image.outputs.precommit }}
           codecheck_image_version: ${{ jobs.JOB_image.outputs.codecheck }}
+      JOB_sim_validation:
+        name: SIM_VALIDATION
+        steps:
+          - name: Checkout
+            identifier: process_checkout
+            uses: checkout
+            with:
+              ref: ${{ atomgit.event.pull_request.merge_commit_sha }}
+              token: ${{ secrets.GIT_TOKEN }}
+              allow-unsafe-pr-checkout: true
+          - name: Prepare simulator environment
+            timeout-minutes: 300
+            run: |
+              set -euo pipefail
+              # The runner declares its own environment (the systemd unit of the
+              # runner service, or its .env): this workflow spells out no host path
+              # and invents no default. Read values with printenv - the platform
+              # rewrites brace syntax inside run blocks, and a bare test would trip
+              # over set -u. See .gitcode/scripts/setup_sim_runner.sh.
+              #
+              # Both values are mandatory: the gate cannot run without them, so a
+              # gap in the runner environment fails this step instead of skipping
+              # it silently.
+              require_env() {
+                if [ -z "$2" ]; then
+                  echo "ERROR: this runner must provide $1 (runner service environment)" >&2
+                  exit 1
+                fi
+              }
+              require_env SIM_PYTHON_BIN "$(printenv SIM_PYTHON_BIN || true)"
+              require_env ASCEND_3RD_LIB_PATH "$(printenv ASCEND_3RD_LIB_PATH || true)"
+              echo "python: $(printenv SIM_PYTHON_BIN)"
+              echo "llvm cache: $(printenv ASCEND_3RD_LIB_PATH)"
+              echo "pto-isa source: $(printenv PTO_ISA_SOURCE_DIR || echo clone-from-url)"
+              echo "pypto source: $(printenv PYPTO_SOURCE_DIR || echo clone-from-url)"
+              # Bisheng parses host side with this contract; derive it from the
+              # active gcc only when the environment did not provide one.
+              bisheng_flags="$(printenv BISHENG_FLAGS || true)"
+              if [ -z "$bisheng_flags" ] && command -v gcc >/dev/null 2>&1; then
+                gcc_install_dir="$(gcc -print-search-dirs | sed -n "s/^install: //p")"
+                gcc_toolchain="$(printf "%s" "$gcc_install_dir" | sed "s|/lib/gcc/.*||")"
+                if [ -n "$gcc_toolchain" ] && [ -d "$gcc_toolchain" ]; then
+                  export BISHENG_FLAGS="--gcc-toolchain=$gcc_toolchain"
+                fi
+              fi
+              bash "${{ steps.process_checkout.outputs.path }}/.gitcode/scripts/sim_validation.sh" build \
+                "${{ steps.process_checkout.outputs.path }}"
+          - name: Run VPTO simulator validation
+            timeout-minutes: 300
+            run: |
+              set -euo pipefail
+              export SIM_SUITE=vpto
+              bash "${{ steps.process_checkout.outputs.path }}/.gitcode/scripts/sim_validation.sh" test \
+                "${{ steps.process_checkout.outputs.path }}"
+          - name: Run TileLang ST validation
+            if: always()
+            timeout-minutes: 300
+            run: |
+              set -euo pipefail
+              export SIM_SUITE=tilelib
+              bash "${{ steps.process_checkout.outputs.path }}/.gitcode/scripts/sim_validation.sh" test \
+                "${{ steps.process_checkout.outputs.path }}"
+          - name: Run PTODSL ST validation
+            if: always()
+            timeout-minutes: 300
+            run: |
+              set -euo pipefail
+              export SIM_SUITE=ptodsl
+              bash "${{ steps.process_checkout.outputs.path }}/.gitcode/scripts/sim_validation.sh" test \
+                "${{ steps.process_checkout.outputs.path }}"
+          - name: Run PyPTO simulator validation
+            if: always()
+            timeout-minutes: 300
+            run: |
+              set -euo pipefail
+              export SIM_SUITE=pypto
+              bash "${{ steps.process_checkout.outputs.path }}/.gitcode/scripts/sim_validation.sh" test \
+                "${{ steps.process_checkout.outputs.path }}"
+          - name: Upload simulator logs
+            if: always()
+            uses: obs-upload
+            with:
+              endpoint: "https://obs.cn-north-4.myhuaweicloud.com"
+              bucket: "ascend-ci"
+              access-key: ${{ secrets.AK }}
+              secret-key: ${{ secrets.SK }}
+              artifact-path: |
+                ${{ steps.process_checkout.outputs.path }}/.work/gitcode-vpto-sim/vpto-sim.log
+                ${{ steps.process_checkout.outputs.path }}/.work/gitcode-vpto-sim/tilelib-st.log
+                ${{ steps.process_checkout.outputs.path }}/.work/gitcode-vpto-sim/ptodsl-dsl-st.log
+                ${{ steps.process_checkout.outputs.path }}/.work/gitcode-vpto-sim/pypto-*.log
+                ${{ steps.process_checkout.outputs.path }}/.work/gitcode-vpto-sim/cases/parallel-runner.log
+                ${{ steps.process_checkout.outputs.path }}/.work/gitcode-vpto-sim/cases/parallel-summary.tsv
+              object-prefix: ${{ env.obs_path }}/sim/
+        runs-on: ["self-hosted", "runner=label_1"]
     pre:
     - type: auto
     fail-fast: false
@@ -170,4 +272,3 @@ post:
     job_post:
       name: Test_post
       uses: cann/.gitcode/.gitcode/workflows/post_action.yml@master
-

@@ -1,0 +1,70 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Grouped reductions are not defined for eight-bit logical vectors: A5 has no
+// eight-bit row or VCG reduction, so those cases are out of contract.
+// RUN: ptoas --pto-arch=a5 --pto-level=level3 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s --implicit-check-not='pto.vmi.'
+module {
+  // CHECK-LABEL: func.func @group_execution_i16_64_1
+  // CHECK: pto.vcadd
+  func.func @group_execution_i16_64_1(%src: !pto.ptr<i16, ub>, %dst: !pto.ptr<i16, ub>, %active: index) {
+    %zero = arith.constant 0 : index
+    %x = pto.vmi.vload %src[%zero] : !pto.ptr<i16, ub> -> !pto.vmi.vreg<64xi16>
+    %m = pto.vmi.create_mask %active : index -> !pto.vmi.mask<64xpred>
+    %r = pto.vmi.vcadd %x, %m {group = 1, reassoc} : !pto.vmi.vreg<64xi16>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<1xi16>
+    %b = pto.vmi.vbrc %r {group = 1} : !pto.vmi.vreg<1xi16> -> !pto.vmi.vreg<64xi16>
+    pto.vmi.vstore %b, %dst[%zero] : !pto.vmi.vreg<64xi16>, !pto.ptr<i16, ub>
+    return
+  }
+  // CHECK-LABEL: func.func @group_execution_i16_128_2
+  // CHECK: pto.vcadd
+  func.func @group_execution_i16_128_2(%src: !pto.ptr<i16, ub>, %dst: !pto.ptr<i16, ub>, %active: index) {
+    %zero = arith.constant 0 : index
+    %x = pto.vmi.vload %src[%zero] : !pto.ptr<i16, ub> -> !pto.vmi.vreg<128xi16>
+    %m = pto.vmi.create_mask %active : index -> !pto.vmi.mask<128xpred>
+    %r = pto.vmi.vcadd %x, %m {group = 2, reassoc} : !pto.vmi.vreg<128xi16>, !pto.vmi.mask<128xpred> -> !pto.vmi.vreg<2xi16>
+    %b = pto.vmi.vbrc %r {group = 2} : !pto.vmi.vreg<2xi16> -> !pto.vmi.vreg<128xi16>
+    pto.vmi.vstore %b, %dst[%zero] : !pto.vmi.vreg<128xi16>, !pto.ptr<i16, ub>
+    return
+  }
+  // CHECK-LABEL: func.func @group_execution_ui16_64_8
+  // CHECK: pto.vcgadd
+  // CHECK-NOT: pto.vpack
+  // CHECK: pto.vselr
+  func.func @group_execution_ui16_64_8(%src: !pto.ptr<ui16, ub>, %dst: !pto.ptr<ui16, ub>, %active: index) {
+    %zero = arith.constant 0 : index
+    %x = pto.vmi.vload %src[%zero] : !pto.ptr<ui16, ub> -> !pto.vmi.vreg<64xui16>
+    %m = pto.vmi.create_mask %active : index -> !pto.vmi.mask<64xpred>
+    %r = pto.vmi.vcadd %x, %m {group = 8, reassoc} : !pto.vmi.vreg<64xui16>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<8xui16>
+    %b = pto.vmi.vbrc %r {group = 8} : !pto.vmi.vreg<8xui16> -> !pto.vmi.vreg<64xui16>
+    pto.vmi.vstore %b, %dst[%zero] : !pto.vmi.vreg<64xui16>, !pto.ptr<ui16, ub>
+    return
+  }
+  // CHECK-LABEL: func.func @group_execution_f16_64_8
+  // CHECK: pto.vcgadd
+  func.func @group_execution_f16_64_8(%src: !pto.ptr<f16, ub>, %dst: !pto.ptr<f16, ub>, %active: index) {
+    %zero = arith.constant 0 : index
+    %x = pto.vmi.vload %src[%zero] : !pto.ptr<f16, ub> -> !pto.vmi.vreg<64xf16>
+    %m = pto.vmi.create_mask %active : index -> !pto.vmi.mask<64xpred>
+    %r = pto.vmi.vcadd %x, %m {group = 8, reassoc} : !pto.vmi.vreg<64xf16>, !pto.vmi.mask<64xpred> -> !pto.vmi.vreg<8xf16>
+    %b = pto.vmi.vbrc %r {group = 8} : !pto.vmi.vreg<8xf16> -> !pto.vmi.vreg<64xf16>
+    pto.vmi.vstore %b, %dst[%zero] : !pto.vmi.vreg<64xf16>, !pto.ptr<f16, ub>
+    return
+  }
+  // CHECK-LABEL: func.func @group_execution_f32_8_1
+  // CHECK: pto.vcgadd
+  func.func @group_execution_f32_8_1(%src: !pto.ptr<f32, ub>, %dst: !pto.ptr<f32, ub>, %active: index) {
+    %zero = arith.constant 0 : index
+    %x = pto.vmi.vload %src[%zero] : !pto.ptr<f32, ub> -> !pto.vmi.vreg<8xf32>
+    %m = pto.vmi.create_mask %active : index -> !pto.vmi.mask<8xpred>
+    %r = pto.vmi.vcadd %x, %m {group = 1, reassoc} : !pto.vmi.vreg<8xf32>, !pto.vmi.mask<8xpred> -> !pto.vmi.vreg<1xf32>
+    %b = pto.vmi.vbrc %r {group = 1} : !pto.vmi.vreg<1xf32> -> !pto.vmi.vreg<8xf32>
+    pto.vmi.vstore %b, %dst[%zero] : !pto.vmi.vreg<8xf32>, !pto.ptr<f32, ub>
+    return
+  }
+}

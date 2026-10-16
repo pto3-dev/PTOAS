@@ -14,10 +14,7 @@
 #include "PTO/Transforms/InsertSync/MemoryDependentAnalyzer.h"
 #include "PTO/Transforms/InsertSync/InsertSyncDebug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "llvm/Support/Debug.h"
- 
-#define DEBUG_TYPE "pto-inject-sync"
- 
+
 using namespace mlir;
 using namespace mlir::pto;
 
@@ -51,24 +48,18 @@ static Value GetRealRoot(Value v) {
     llvm::errs() << "  [Trace] GetRealRoot Start:\n";
     printValueDebug("    Current", v);
   }
-  
-  int depth = 0;
-  const int maxDepth = 20;
- 
-  while (v && depth++ < maxDepth) {
-    Operation *defOp = v.getDefiningOp();
-    if (!defOp) {
-      if (trace) {
-        llvm::errs() << "    -> Reached BlockArgument. Stop.\n";
-      }
-        break; 
+
+  Operation *defOp = v ? v.getDefiningOp() : nullptr;
+  if (!defOp) {
+    if (trace && v) {
+      llvm::errs() << "    -> Reached BlockArgument. Stop.\n";
     }
- 
-    if (trace) {
-      llvm::errs() << "    -> Hit Alloc/Other [" << defOp->getName()
-                   << "]. Stop.\n";
-    }
-    break;
+    return v;
+  }
+
+  if (trace) {
+    llvm::errs() << "    -> Hit Alloc/Other [" << defOp->getName()
+                 << "]. Stop.\n";
   }
   return v;
 }
@@ -159,7 +150,7 @@ static bool isLocalBufferOverlapCrossRoot(const BaseMemInfo *a,
 bool MemoryDependentAnalyzer::DepBetween(
     const SmallVector<const BaseMemInfo *> &a,
     const SmallVector<const BaseMemInfo *> &b,
-    DepBaseMemInfoPairVec &depBaseMemInfosVec) {
+    DepBaseMemInfoPairVec &depBaseMemInfosVec) const {
   // [Debug Log] 关键入口信息
   if (isTraceEnabled()) {
     llvm::errs() << "\n[DepBetween] Checking dependency...\n";
@@ -180,7 +171,7 @@ bool MemoryDependentAnalyzer::DepBetween(
 }
  
 bool MemoryDependentAnalyzer::MemAlias(const BaseMemInfo *a,
-                                       const BaseMemInfo *b) {
+                                       const BaseMemInfo *b) const {
   pto::AddressSpace as = a->scope;
   pto::AddressSpace bs = b->scope;
  
@@ -211,8 +202,18 @@ bool MemoryDependentAnalyzer::MemAlias(const BaseMemInfo *a,
   if (as == pto::AddressSpace::GM) {
     return isGMBufferOverlap(a, b);
   }
- 
+
   // 2. Local Memory (UB/L1)
+  // TWO SOURCES set these addresses, not one. PTOPlanMemory writes them back to
+  // allocation roots; and under --pto-level=level3 the caller writes them itself as a
+  // constant `addr` operand on alloc_tile, which PTOIRTranslator records with the flag
+  // set. "Known" means the analyzer can trust the address is real and stable, NOT that a
+  // particular pass produced it.
+  //
+  // Comparing these ranges is also the only way two DISTINCT roots at partially
+  // overlapping addresses are seen to alias, which is what makes aliasing non-transitive
+  // and lets a buffer clique hold more than one tile.
+  //
   // PTOPlanMemory writes physical addresses back to allocation roots. Once an
   // async MTE3 store has consumed the source SSA, a later allocation can reuse
   // the same physical range with a different alloc_tile root. Compare those
@@ -284,7 +285,7 @@ bool MemoryDependentAnalyzer::MemAlias(const BaseMemInfo *a,
 }
  
 bool MemoryDependentAnalyzer::isGMBufferOverlap(const BaseMemInfo *a,
-                                                const BaseMemInfo *b) {
+                                                const BaseMemInfo *b) const {
   if (a->baseAddresses.empty() || b->baseAddresses.empty()) {
     return true;
   }
@@ -308,7 +309,7 @@ bool MemoryDependentAnalyzer::isGMBufferOverlap(const BaseMemInfo *a,
 }
  
 bool MemoryDependentAnalyzer::isBufferAddressRangeOverlap(
-    const BaseMemInfo *a, const BaseMemInfo *b) {
+    const BaseMemInfo *a, const BaseMemInfo *b) const {
   int aBaseAddressesSize = static_cast<int>(a->baseAddresses.size());
   int bBaseAddressesSize = static_cast<int>(b->baseAddresses.size());
   
@@ -324,7 +325,7 @@ bool MemoryDependentAnalyzer::isBufferAddressRangeOverlap(
  
 bool MemoryDependentAnalyzer::isBufferOverlap(const BaseMemInfo *a,
                                               const BaseMemInfo *b, int aIndex,
-                                              int bIndex) {
+                                              int bIndex) const {
   uint64_t aStart = a->baseAddresses[aIndex];
   uint64_t bStart = b->baseAddresses[bIndex];
   uint64_t aEnd = aStart + a->allocateSize;

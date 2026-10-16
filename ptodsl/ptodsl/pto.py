@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """
 ``pto`` – the public DSL namespace.
 
@@ -42,6 +44,8 @@ from ._surface_types import (   # noqa: F401
     const_expr,
     BarrierType,
     Pipe,
+    SyncAllMode,
+    SyncCoreType,
     MemorySpace,
     BLayout,
     SLayout,
@@ -97,7 +101,7 @@ from ._ops import (             # noqa: F401
     make_mask, bytewidth, elements_per_vreg,
     pand, por, pxor, pnot, psel,
     pbitcast,
-    vcvt, vpack, vmulscvt,
+    vcvt, vpack, vunpack, vmulscvt,
     ppack, punpack,
     pintlv_b8, pintlv_b16, pintlv_b32,
     pdintlv_b8, pdintlv_b16, pdintlv_b32,
@@ -110,12 +114,13 @@ from ._ops import (             # noqa: F401
     vadd, vsub, vmul, vdiv, vmax, vmin,
     vand, vor, vxor, vshl, vshr, vshls, vshrs,
     vcmax, vcadd, vcmin, vdup, vexpdif,
-    vexp, vln, vsqrt, vabs, vneg, vrec, vrsqrt, vrelu, vnot, vsqz,
+    vexp, vln, vsqrt, vabs, vneg, vrec, vrsqrt, vrelu, vnot, vsqz, vusqz,
     vcgmax, vcgadd, vcgmin, vcpadd,
     vtrc, vprelu, vintlv, vdintlv, vselr,
-    chistv2,
-    vci, vaddc, vaddcs, vmull, vbitsort, vmrgsort4,
-    load_scalar, store_scalar, print,
+    chistv2, dhistv2,
+    vci, vaddc, vsubc, vaddcs, vsubcs, vmull, vbitsort, vmrgsort4,
+    ld_dev, st_dev,
+    print,
     vadds, vsubs, vmuls, vmaxs, vmins, vlrelu, vands, vors, vxors,
     vaxpy, vaddrelu, vsubrelu,
     vmula, vmadd,
@@ -128,6 +133,8 @@ from ._ops import (             # noqa: F401
     mte_load, mte_store, mte_gm_ub, mte_ub_gm, mte_ub_ub, mte_ub_l1,
     mte_gm_l1, raw_fill_l1, mte_l1_ub, mte_gm_l1_frac, mte_l1_bt, mte_l1_fb, mem_bar,
     set_store_atomic_cfg,
+    get_ctrl, set_ctrl, set_mov_pad_val,
+    set_loop_size_ubtoout, set_loop_size_outtoub,
     set_atomic_add, set_atomic_max, set_atomic_min, set_atomic_none,
     set_atomic_f32, set_atomic_f16, set_atomic_bf16,
     set_atomic_s32, set_atomic_s16, set_atomic_s8,
@@ -152,11 +159,11 @@ from ._ops import (             # noqa: F401
     atomic_and, atomic_or, atomic_xor, atomic_cas,
     prmt, mulhi, mul_i32toi64,
     absf, sqrt, exp, log, sin, cos, pow, ceil, floor, rint, round,
-    fmin, fmax, fma, convert,
+    fma,
     syncthreads, threadfence, threadfence_block, trap, keep, resume,
     pipe_barrier,
     get_buf, rls_buf,
-    set_cross_block, wait_cross_block, set_intra_block, wait_intra_block,
+    set_cross_block, wait_cross_block, set_intra_block, wait_intra_block, syncall,
     set_flag, wait_flag,
     reserve_buffer, import_reserved_buffer,
 )
@@ -170,14 +177,55 @@ from ._control_flow import (    # noqa: F401
     _short_circuit_and, _short_circuit_or,
 )
 
-# ── All-reduce ─────────────────────────────────────────────────────────────────
-from ._allreduce import simt_allreduce_max, simt_allreduce_min, simt_allreduce_sum  # noqa: F401
+# ── Scalar value and memory surface ──────────────────────────────────────────
+#
+# Keep the implementation in one internal module while exposing one public
+# namespace: ``pto.*``. These helpers preserve common scalar operations as PTO
+# dialect ops until PTOAS legalizes them to arith/math/LLVM after scope validation;
+# memory helpers select PTO-pointer or LLVM stack-memory access from the address
+# value passed to ``load`` / ``store``.
+from ._scalar import (         # noqa: F401,E402
+    add,
+    addui_extended,
+    bitcast,
+    cast,
+    ceildiv,
+    cmp,
+    div,
+    exp,
+    floordiv,
+    load,
+    log,
+    maximum,
+    minimum,
+    mul,
+    mul_extended,
+    neg,
+    rem,
+    select,
+    shl,
+    shr,
+    sqrt,
+    store,
+    sub,
+)
+from . import _scalar as _scalar_namespace
 
 # ── Decorator ─────────────────────────────────────────────────────────────────
 from ._jit import jit, KernelHandle, merge_jit_modules      # noqa: F401
 from ._func import func  # noqa: F401
 from ._subkernels import cube, simd, simt, tileop     # noqa: F401
 from ._pipe_namespace import pipe  # noqa: F401
+
+# ── Standard library ─────────────────────────────────────────────────────────
+# The stdlib export catalog is imported eagerly (it is a read-only mapping),
+# while the implementation modules resolve lazily on first attribute access.
+from .stdlib import _exports as _stdlib_exports  # noqa: F401
+
+# pto.max / pto.min / pto.abs keep their builtin names on the public DSL surface,
+# so bind them from the implementation module instead of importing the names.
+for _builtin_named in ('max', 'min', 'abs'):
+    globals()[_builtin_named] = getattr(_scalar_namespace, _builtin_named)
 
 # ── Shorthand dtype aliases ───────────────────────────────────────────────────
 def gm_ptr(elem):
@@ -196,8 +244,47 @@ mask_b16 = mask_type("b16")
 mask_b32 = mask_type("b32")
 PAT = MaskPattern
 
+_RESERVED_PUBLIC_SURFACE_NAMES = frozenset({
+    "ukernel", "tile_buf_type", "as_ptr", "vbrc_load", "vsts_1pt",
+    "constexpr", "copy_ubuf_to_ubuf", "tensor_spec", "TensorSpec",
+})
+
+# The public surface is every non-private module member.  Derive ``__all__``
+# from ``globals()`` so newly added APIs are star-importable without manual
+# registration here; stdlib catalog names are appended on top (collision-free
+# by ``_validate_stdlib_catalog_collisions`` below).
+_existing_public_names = [
+    name for name in globals()
+    if not name.startswith("_")
+]
+
+__all__ = [
+    *_existing_public_names,
+    *_stdlib_exports.public_export_names(),
+]
+
+
+def _validate_stdlib_catalog_collisions():
+    for name in _stdlib_exports.public_export_names():
+        if name in globals():
+            raise RuntimeError(
+                f"PTODSL stdlib export {name!r} collides with an existing "
+                f"{__name__} member"
+            )
+
+
+_validate_stdlib_catalog_collisions()
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
+
 
 def __getattr__(name):
-    if name in {"ukernel", "tile_buf_type", "as_ptr", "vbrc_load", "vsts_1pt", "constexpr", "copy_ubuf_to_ubuf", "tensor_spec", "TensorSpec"}:
+    if name in _RESERVED_PUBLIC_SURFACE_NAMES:
         raise unsupported_public_surface_error(name)
+    if name in _stdlib_exports.EXPORTS:
+        resolved = _stdlib_exports.resolve_export(name)
+        globals()[name] = resolved
+        return resolved
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

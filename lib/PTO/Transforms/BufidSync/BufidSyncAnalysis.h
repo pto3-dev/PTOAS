@@ -22,7 +22,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
-
 namespace mlir {
 namespace pto {
 
@@ -215,6 +214,41 @@ inline void printVirtualBufIds(llvm::raw_ostream &os,
   }
 }
 
+inline void printOp2BufSyncEntry(llvm::raw_ostream &os, Operation *op,
+                                 const BufSyncPipeBuild &build,
+                                 unsigned printIdx) {
+  auto firstSyncIdx = build.pipeBefore.empty()
+                          ? (build.pipeAfter.empty() ? 0
+                                                     : build.pipeAfter[0].syncIRIndex)
+                          : build.pipeBefore[0].syncIRIndex;
+  os << "  [" << printIdx << "][syncIR=" << firstSyncIdx << "] op: ";
+  op->getName().print(os);
+  if (op->getNumResults() > 0) {
+    os << " ";
+    op->getResult(0).printAsOperand(os, OpPrintingFlags());
+  }
+  os << " <- ";
+  for (unsigned i = 0; i < op->getNumOperands(); ++i) {
+    if (i > 0) {
+      os << ", ";
+    }
+    op->getOperand(i).printAsOperand(os, OpPrintingFlags());
+  }
+  os << "\n    pipeBefore:";
+  for (auto &s : build.pipeBefore) {
+    os << " [GET_BUF pipe=" << static_cast<int>(s.pipe)
+       << " logicId=" << s.logicId
+       << " syncIR=" << s.syncIRIndex << "]";
+  }
+  os << "\n    pipeAfter:";
+  for (auto &s : build.pipeAfter) {
+    os << " [RLS_BUF pipe=" << static_cast<int>(s.pipe)
+       << " logicId=" << s.logicId
+       << " syncIR=" << s.syncIRIndex << "]";
+  }
+  os << "\n";
+}
+
 inline void printOp2BufSync(llvm::raw_ostream &os,
                             const DenseMap<Operation *, BufSyncPipeBuild> &op2BufSync,
                             func::FuncOp func, const char *title = nullptr) {
@@ -230,7 +264,11 @@ inline void printOp2BufSync(llvm::raw_ostream &os,
 
   DenseMap<const Operation *, unsigned> opOrder;
   unsigned orderIdx = 0;
-  func.walk([&](Operation *op) { opOrder[op] = orderIdx++; });
+  for (auto &block : func.getBody().getBlocks()) {
+    for (auto &op : block.getOperations()) {
+      opOrder[&op] = orderIdx++;
+    }
+  }
 
   std::sort(sortedOps.begin(), sortedOps.end(),
             [&](const Operation *a, const Operation *b) {
@@ -241,36 +279,7 @@ inline void printOp2BufSync(llvm::raw_ostream &os,
   unsigned printIdx = 0;
   for (auto *op : sortedOps) {
     auto &build = op2BufSync.find(op)->second;
-    auto firstSyncIdx = build.pipeBefore.empty()
-                            ? (build.pipeAfter.empty() ? 0
-                                                       : build.pipeAfter[0].syncIRIndex)
-                            : build.pipeBefore[0].syncIRIndex;
-    os << "  [" << printIdx << "][syncIR=" << firstSyncIdx << "] op: ";
-    op->getName().print(os);
-    if (op->getNumResults() > 0) {
-      os << " ";
-      op->getResult(0).printAsOperand(os, OpPrintingFlags());
-    }
-    os << " <- ";
-    for (unsigned i = 0; i < op->getNumOperands(); ++i) {
-      if (i > 0) {
-        os << ", ";
-      }
-      op->getOperand(i).printAsOperand(os, OpPrintingFlags());
-    }
-    os << "\n    pipeBefore:";
-    for (auto &s : build.pipeBefore) {
-      os << " [GET_BUF pipe=" << static_cast<int>(s.pipe)
-         << " logicId=" << s.logicId
-         << " syncIR=" << s.syncIRIndex << "]";
-    }
-    os << "\n    pipeAfter:";
-    for (auto &s : build.pipeAfter) {
-      os << " [RLS_BUF pipe=" << static_cast<int>(s.pipe)
-         << " logicId=" << s.logicId
-         << " syncIR=" << s.syncIRIndex << "]";
-    }
-    os << "\n";
+    printOp2BufSyncEntry(os, op, build, printIdx);
     ++printIdx;
   }
 }
@@ -296,6 +305,13 @@ inline void printLogicToPhysical(llvm::raw_ostream &os,
     os << "  logicId=" << lid << " -> physicalId=" << pid << "\n";
   }
 }
+
+// optimizeSamePipeMerge()/reuseIds() helper: copy `in` into `out`, remapping
+// each logicId through mergeMap and dropping duplicates by (pipe, remapped
+// logicId). Shared by BufidSyncAnalysis and BufidSyncIdAlloc.
+void remapSyncList(const SmallVector<BufSyncOperation> &in,
+                   const DenseMap<int, int> &mergeMap,
+                   SmallVector<BufSyncOperation> &out);
 
 class BufidSyncAnalysis {
 public:
@@ -324,6 +340,36 @@ private:
   bool isSamePipe(const CompoundInstanceElement *a,
                   const CompoundInstanceElement *b) const;
   void collectTilesFromDepPairs();
+  // collectDependencies() helper: run the three-way DepBetween probe between two
+  // compounds, returning true (with `out` populated) on the first hit.
+  bool detectDependency(CompoundInstanceElement *src,
+                        CompoundInstanceElement *dst,
+                        DepBaseMemInfoPairVec &out) const;
+  // collectDependencies() helper: probe one ordered compound pair and build the
+  // resulting DepPair, or std::nullopt when there is no local dependency.
+  std::optional<DepPair> tryBuildDepPair(CompoundInstanceElement *src,
+                                         CompoundInstanceElement *dst) const;
+  // collectTilesFromDepPairs() helpers: gather raw tiles from depPairs_, then
+  // drop duplicates that share (scope, baseAddr, size) and alias/root buffer.
+  void collectRawTiles();
+  DenseSet<unsigned> computeRemovedTileIndices() const;
+  void dedupTiles();
+  // optimizeSamePipeMerge() helpers.
+  DenseMap<int, DenseSet<int>> computeLogicIdToPipeInts() const;
+  DenseMap<int, int>
+  computeSamePipeMergeMap(const DenseMap<int, DenseSet<int>> &logicIdToPipeInts) const;
+  void accumulateMergesForOp(
+      const DenseMap<int, SmallVector<int>> &pipeIntToLogicIds,
+      const DenseMap<int, DenseSet<int>> &logicIdToPipeInts,
+      DenseMap<int, int> &mergeMap) const;
+  // accumulateMergesForOp() helpers: group a pipe's logic ids by their single
+  // cross-pipe signature, then merge same-signature groups into one survivor.
+  DenseMap<int, SmallVector<int>> computeCrossPipeSignatureGroups(
+      int pipeInt, const SmallVector<int> &logicIds,
+      const DenseMap<int, DenseSet<int>> &logicIdToPipeInts) const;
+  void mergeSignatureGroups(const DenseMap<int, SmallVector<int>> &sigGroups,
+                            DenseMap<int, int> &mergeMap) const;
+  void rebuildOp2BufSyncWithMerge(const DenseMap<int, int> &mergeMap);
   int findBestVirtualBufId(const BaseMemInfo *tile) const;
   int findBestVirtualBufId(const DepPair &depPair) const;
   bool virtualBufIdContainsTile(const VirtualBufId &vbid,

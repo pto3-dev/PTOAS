@@ -22,6 +22,55 @@
 
 namespace mlir::pto {
 
+/// True when `layout` is a group-slot packet that lives in a single physical
+/// chunk and puts logical lane i on physical lane i.
+/// A `num_groups = G, slots = S, lane_stride = 1` layout places logical lane i
+/// at {part 0, chunk i / S, lane i % S}.  With `G <= S` every lane lands in
+/// chunk 0 at lane i, and `G <= lanesPerPart` keeps that lane inside the
+/// carrier, so the value occupies exactly one physical register whose live
+/// lanes are 0..G-1.
+bool isVMISingleCarrierGroupSlots(VMILayoutAttr layout, int64_t lanesPerPart);
+
+/// Same as isVMISingleCarrierGroupSlots with the lane stride spelled out: the
+/// packet places logical lane i at {part 0, chunk i / S, lane (i % S) * LS}.
+/// A lane stride other than 1 is only meaningful for sub-32-bit elements, whose
+/// several values share one carrier lane; a 32-bit element already fills a
+/// carrier lane.  The supported strides therefore follow the packable carrier
+/// chain (32 -> 16 -> 8): stride 2 up to 16-bit elements, stride 4 up to 8-bit.
+/// Only the slot widths the lowering builds qualify (one or eight group slots
+/// per part): a packet with more slots spreads its groups over several carriers
+/// and is hand-written IR that no producer emits.
+bool isVMISingleCarrierGroupSlotsWithStride(VMILayoutAttr layout,
+                                            int64_t lanesPerPart,
+                                            int64_t laneStride);
+
+/// True when a dense value and a single-carrier group packet differ in lane
+/// stride, so the carrier identity cannot bridge them directly and the dense
+/// lane stride has to be normalized through a contiguous intermediate first.
+/// Kept next to the single-carrier predicate so the ensure_layout query and the
+/// materializer agree on which pairs are supported.
+/// `elementType` bounds the bridge to the shapes the dense lane-stride
+/// materialization covers (8/16-bit elements; lane stride 4 only for 8-bit).
+/// One of the two strides also has to be the unit stride, because the dense
+/// lane-stride materialization moves between the unit stride and a strided form
+/// only; two non-unit strides would need two such moves.
+bool needsVMIDenseLaneStrideGroupSlotBridge(VMILayoutAttr sourceLayout,
+                                            VMILayoutAttr resultLayout,
+                                            Type elementType,
+                                            int64_t lanesPerPart);
+
+/// True when a group-slot packet and a dense contiguous vector describe exactly
+/// the same physical lanes of a single carrier, so converting between them is a
+/// pure register forward with no pack/zip/shuffle.  Symmetric in `lhs`/`rhs`:
+/// the relation holds in both directions.
+/// Short dense vectors reach group operations through this relation: a group
+/// reduce with one result group, or a group broadcast reading eight slot
+/// values, is a genuine group packet, while the value a plain vload produces is
+/// dense.  Stating the invariant keeps that bridge free of any group count
+/// list.
+bool isVMISingleCarrierGroupSlotAlias(VMILayoutAttr lhs, VMILayoutAttr rhs,
+                                      int64_t lanesPerPart);
+
 struct VMILoadLayoutFact {
   VMILayoutAttr resultLayout;
 };
@@ -111,6 +160,7 @@ struct VMIBitcastLayoutFact {
 };
 
 enum class VMIGroupBlockClass {
+  Compact,
   QuarterBlock,
   HalfBlock,
   OneBlock,
@@ -176,6 +226,10 @@ struct VMIGroupSlotLayoutFact {
   int64_t numGroups = 0;
   int64_t slots = 0;
 };
+
+// Integer vcgadd widens its physical sums; other reductions keep their width.
+enum class VMIGroupReduceKind { IntegerAdd, Other };
+VMIGroupReduceKind getVMIGroupReduceKind(Operation *op);
 
 enum class VMIGroupReduceLayoutPort {
   Source,
@@ -251,9 +305,50 @@ public:
   getEnsureMaskLayoutFact(VMIMaskType sourceType, VMIMaskType resultType,
                           std::string *reason = nullptr) const;
 
+  // Preferred cast relation.  \p allowLaneStridePreference decides whether the
+  // lane-stride *cost* rows may answer ahead of the default preferred table:
+  // the one-chunk high-priority relations and the
+  // kPreferredLaneStrideNarrowCastLayoutPatterns rows.  Passing false leaves
+  // only the table's own default row for the width pair, which for every
+  // widening pair is {c(), d(f)} - i.e. the narrow side stays contiguous and
+  // the wide side takes the deinterleaved form the per-part vcvt actually
+  // produces.  It is a caller-supplied fact rather than a property of the width
+  // pair, because whether the lane stride is worth paying is decided by what the
+  // narrow side is used for, not by the cast.
   FailureOr<VMICastLayoutFact>
   getPreferredCastLayoutFact(VMIVRegType sourceType, VMIVRegType resultType,
-                             std::string *reason = nullptr) const;
+                             std::string *reason = nullptr,
+                             bool allowLaneStridePreference = true) const;
+
+  // Spine-*scoped* cast layout query.
+  // These queries are the only way to reach kSpineScopedCastLayoutPatterns /
+  // kSpineScopedLegalCastLayoutPatterns.  Those rows are not part of the
+  // generic preferred/legal tables, so a caller that does not explicitly ask
+  // for the spine-scoped variant can never observe them - the scope is enforced
+  // by construction (the rows are reachable from this entry point only), not by
+  // "the candidate happened not to be selected".
+  // The direction-spine peephole in VMILayoutAssignment calls this variant for
+  // the cast ops of a matched <up,down,up,down> chain whose narrowing leg is
+  // handed straight to the closing widening leg.  The scoped table adds the
+  // composite 16<->32 and 32<->8 rows (deinterleaved=4 -> deinterleaved=4 with
+  // an explicit lane stride) that keep the narrow value split over the four
+  // physical parts of its wide side, so the narrowing and the widening are
+  // per-chunk 1:1 and need no pto.vor assembly.
+  FailureOr<VMICastLayoutFact> getSpineScopedCastLayoutFact(
+      VMIVRegType sourceType, VMIVRegType resultType,
+      std::string *reason = nullptr) const;
+
+  FailureOr<VMICastLayoutFact> getSpineScopedCastLayoutFactForLayouts(
+      VMIVRegType sourceType, VMIVRegType resultType,
+      VMILayoutAttr sourceLayout, VMILayoutAttr resultLayout,
+      std::string *reason = nullptr) const;
+
+  FailureOr<SmallVector<VMICastLayoutFact, mlir::pto::kValue4>>
+  getSpineScopedCastLayoutFactsForLayout(VMIVRegType sourceType,
+                                         VMIVRegType resultType,
+                                         VMICastLayoutPort port,
+                                         VMILayoutAttr layout,
+                                         std::string *reason = nullptr) const;
 
   FailureOr<SmallVector<VMICastLayoutFact, mlir::pto::kValue4>>
   getCastLayoutFactsForLayout(VMIVRegType sourceType, VMIVRegType resultType,
@@ -352,17 +447,37 @@ public:
                                       VMIVRegType valueType,
                                       std::string *reason = nullptr) const;
 
+  LogicalResult getGroupOperationShapeSupport(Operation *op,
+                                               std::string *reason = nullptr) const;
+
+  // Shape-only capability checks for diagnostics before layout assignment.
+  // Assigned source layouts are respected; lowering checks the full fact again.
+  LogicalResult getGroupReduceShapeSupport(VMIGroupReduceKind kind,
+                                           VMIVRegType sourceType,
+                                           int64_t numGroups,
+                                           std::string *reason = nullptr) const;
+  FailureOr<VMIGroupBroadcastLayoutFact>
+  getPreferredGroupBroadcastLayoutFact(VMIVRegType resultType, int64_t numGroups,
+                                       std::string *reason = nullptr) const;
+  VMILayoutAttr getPreferredGroupBroadcastResultLayout(
+      VMIVRegType resultType, int64_t numGroups) const;
+  LogicalResult getGroupBroadcastShapeSupport(VMIVRegType resultType,
+                                              int64_t numGroups,
+                                              std::string *reason = nullptr) const;
+
   FailureOr<VMIGroupReduceLayoutFact>
-  getPreferredGroupReduceLayoutFact(VMIVRegType sourceType, int64_t numGroups,
+  getPreferredGroupReduceLayoutFact(VMIGroupReduceKind kind,
+                                    VMIVRegType sourceType, int64_t numGroups,
                                     std::string *reason = nullptr) const;
 
   FailureOr<VMIGroupReduceLayoutFact> getGroupReduceLayoutFactForLayouts(
-      VMIVRegType sourceType, VMIMaskType maskType, VMIVRegType resultType,
-      int64_t numGroups, std::string *reason = nullptr) const;
+      VMIGroupReduceKind kind, VMIVRegType sourceType, VMIMaskType maskType,
+      VMIVRegType resultType, int64_t numGroups,
+      std::string *reason = nullptr) const;
 
   FailureOr<SmallVector<VMIGroupReduceLayoutFact, mlir::pto::kValue4>>
-  getGroupReduceLayoutFactsForLayout(VMIVRegType sourceType,
-                                     int64_t numGroups,
+  getGroupReduceLayoutFactsForLayout(VMIGroupReduceKind kind,
+                                     VMIVRegType sourceType, int64_t numGroups,
                                      VMIGroupReduceLayoutPort port,
                                      VMILayoutAttr layout,
                                      std::string *reason = nullptr) const;
@@ -446,6 +561,12 @@ public:
   LogicalResult getExtFSupport(VMIExtFOp op,
                                std::string *reason = nullptr) const;
 
+  LogicalResult getVUnzipSupport(VMIVUnzipOp op,
+                                std::string *reason = nullptr) const;
+
+  LogicalResult getVZipSupport(VMIVZipOp op,
+                              std::string *reason = nullptr) const;
+
   LogicalResult getExtSISupport(VMIExtSIOp op,
                                 std::string *reason = nullptr) const;
 
@@ -475,6 +596,36 @@ public:
   LogicalResult getVchistSupport(VMIVchistOp op,
                                 std::string *reason = nullptr) const;
 };
+
+/// True when an already assigned BF16/F32 cast pair preserves one of the
+/// regular physical lane maps that the pairwise intlv/dintlv lowering can
+/// preserve.  This is validation-only: it is not a layout candidate and must
+/// not participate in layout assignment or propagation.
+bool isBF16SameLayoutCastPair(VMIVRegType sourceType, VMIVRegType resultType,
+                              VMILayoutAttr sourceLayout,
+                              VMILayoutAttr resultLayout);
+
+/// True for an already assigned F32 deinterleaved=4 -> BF16 contiguous
+/// narrowing. This is validator-only and is not a layout-solver candidate.
+bool isDeinterleaved4ToContiguousBF16CastPair(VMIVRegType sourceType,
+                                              VMIVRegType resultType,
+                                              VMILayoutAttr sourceLayout,
+                                              VMILayoutAttr resultLayout);
+
+/// True when the direct E2B packet backing \p fact can be materialized at the
+/// address of \p op.  E2B needs a stricter base-address alignment than the
+/// per-group BRC fallback, so layout selection and the implicit ensure-layout
+/// expansion must agree with the lowering's E2B address gate.
+bool isGroupBroadcastLoadDirectAddressLegal(
+    VMIGroupBroadcastLoadOp op, const VMIGroupBroadcastLoadDirectFact &fact);
+
+/// When the direct E2B layout of \p op cannot be materialized because its base
+/// address is not provably aligned, return the contiguous layout the per-group
+/// BRC path can lower instead, or null when the E2B layout still applies.
+VMILayoutAttr getUnalignedE2BFallbackLayout(
+    VMIGroupBroadcastLoadOp op, VMIVRegType type,
+    const VMIGroupBroadcastLoadDirectFact &fact,
+    const VMILayoutSupport &supports);
 
 } // namespace mlir::pto
 

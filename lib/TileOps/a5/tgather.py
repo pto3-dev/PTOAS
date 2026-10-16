@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -12,7 +13,7 @@ from ptodsl import pto
 import ptodsl.tilelib as tilelib
 from ._common import NUMERIC_DTYPES
 from ._common import element_store_dist
-from ._row_arg import _scalar_literal
+from ._common import scalar_literal
 
 
 def _axis_is_row(axis_value, **_):

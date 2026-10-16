@@ -337,7 +337,7 @@ layout pass at once:
 
 ```text
 include/PTO/Transforms/VMILayoutPropagation.h
-lib/PTO/Transforms/VMILayoutPropagation.cpp
+lib/PTO/Transforms/VMI/VMILayoutPropagation.cpp
 ```
 
 The public type should expose value layout requests, operand-local value layout
@@ -882,9 +882,10 @@ T32 -> T8:
   contiguous      -> lane_stride=4
 ```
 
-Layout legality depends on storage width and physical layout, not on whether
-the op is floating-point or integer.  The op support layer still checks whether
-a particular VMI op and element type are valid.
+Storage width and physical layout determine the lane mapping. Some legal rows
+also restrict the type class, such as integer-to-unsigned narrowing. The fact
+query applies those restrictions, and the op support layer checks whether the
+particular VMI op and element types are supported.
 
 Group-slot cast rows live in the same legal table.  They are written as
 parameterized layout patterns; `num_groups = G` is inherited from the anchor
@@ -907,6 +908,8 @@ T8 -> T32:
 T16 -> T8:
   group_slots(G, slots=1) -> group_slots(G, slots=1)
   group_slots(G, slots=8) -> group_slots(G, slots=8, lane_stride=2)
+  group_slots(G, slots=8, lane_stride=2) -> group_slots(G, slots=8, lane_stride=4)
+    (integer source -> ui8 only)
 
 T32 -> T16:
   group_slots(G, slots=1) -> group_slots(G, slots=1)
@@ -920,6 +923,11 @@ T32 -> T8:
 There is no separate group-slot branch in the fact query.  Dense and group-slot
 casts are both produced by matching the same legal table against the source or
 result anchor layout.
+
+The native integer `gs(8, 2)` result can therefore widen from 16 to 32 bits by
+converting its logical low halfwords, or narrow to `ui8` in `gs(8, 4)`, without
+first packing to `gs(8)`. The latter relation also has a matching
+`b16 gs(8, 2) -> b8 gs(8, 4)` mask-granularity row.
 
 The preferred table is a subset of the legal table.  Exact `N` rows override
 the default row for the same width pair:
@@ -981,7 +989,8 @@ table is parameterized by:
 ```text
 G = num_groups
 group_size = source_element_count / G
-VcgBlockElems = elements in one 32B VCG block
+VcgBlockElems = 32B / sizeof(logical input element)
+R = 2 for native 16-bit integer add, 1 for other native VCG reductions
 ```
 
 The query first classifies `group_size` against `VcgBlockElems`.  The class is
@@ -1006,27 +1015,27 @@ block classification:
 gb(1, 4):
   source ls(4)
   mask   same(source)
-  result gs(8)
+  result gs(8, R)
 
 gb(1, 2):
   source ls(2)
   mask   same(source)
-  result gs(8)
+  result gs(8, R)
 
 gb(1):
   source c()
   mask   same(source)
-  result gs(8)
+  result gs(8, R)
 
 gb(2):
   source d(2)
   mask   same(source)
-  result gs(8)
+  result gs(8, R)
 
 gb(4):
   source d(4)
   mask   same(source)
-  result gs(8)
+  result gs(8, R)
 
 gbFull():
   source c()
@@ -1038,7 +1047,7 @@ The preferred table is not the whole legal relation.  A concrete fact query
 also exists for post-assignment validation:
 
 ```text
-getGroupReduceLayoutFactForLayouts(source, mask, result, num_groups)
+getGroupReduceLayoutFactForLayouts(kind, source, mask, result, num_groups)
 ```
 
 It matches the assigned source/mask/result layouts against legal rows for the
@@ -1046,6 +1055,13 @@ classified group block.  Legal rows include additional source/mask alternatives
 for the same semantic row, such as ordinary `d(2|4)` and block-based `bd(2|4)`
 for the two-block and four-block cases. Those alternatives are part of the
 layout relation, not ad-hoc support relaxations.
+
+Reduction kind and input width are part of this query: native 16-bit integer
+add produces `gs(8, 2)` even when its consumers prefer another layout. The
+32-bit hardware accumulator does not change `VcgBlockElems` for a 16-bit input.
+This table describes native VCG and full-part paths; A5's bounded 8-bit
+software fallback has separate shape constraints. See the
+[native integer layout contract](a5-vcg-integer-native-layout.md).
 
 The concrete query is the single source of truth for layout-driven shape
 legality.  It may compute physical arity from the concrete VMI types, but only
@@ -1060,7 +1076,7 @@ in layout support:
 floating-point reassociation requirement
 source/result element type equality
 result element count equals num_groups
-integer group reduction accumulator type
+supported integer group reduction element type
 mask/data compatibility
 num_groups divisibility
 ```

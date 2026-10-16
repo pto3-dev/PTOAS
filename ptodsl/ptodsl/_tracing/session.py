@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Trace-session objects shared by PTODSL tracing runtimes."""
 
 from __future__ import annotations
@@ -14,7 +16,23 @@ from dataclasses import dataclass
 import hashlib
 import inspect
 
+from ptoas.mlir.dialects import func
+from ptoas.mlir.dialects import pto as _pto
+from ptoas.mlir.ir import (
+    Attribute,
+    FlatSymbolRefAttr,
+    IndexType,
+    InsertionPoint,
+    IntegerAttr,
+    IntegerType,
+    Operation,
+    StringAttr,
+    Type,
+    UnitAttr,
+)
+
 from .._diagnostics import (
+    init_core_physical_section_required_error,
     inline_subkernel_value_escape_error,
     inline_tileop_capture_type_error,
     physical_section_value_escape_error,
@@ -41,21 +59,6 @@ from .control_flow import (
 )
 from .._types import _resolve, _strip_integer_signedness, int1
 from .module_builder import create_container_child_module
-
-from ptoas.mlir.dialects import arith, func
-from ptoas.mlir.dialects import pto as _pto
-from ptoas.mlir.ir import (
-    Attribute,
-    FlatSymbolRefAttr,
-    IndexType,
-    InsertionPoint,
-    IntegerAttr,
-    IntegerType,
-    Operation,
-    StringAttr,
-    Type,
-    UnitAttr,
-)
 
 
 @dataclass(frozen=True)
@@ -180,6 +183,8 @@ class TraceSession:
         self._carry_loop_stack = []
         self._active_physical_sections: set[object] = set()
         self._authored_physical_sections: dict[object, set[str]] = {}
+        self._physical_section_owner_symbols: set[str] = set()
+        self._unscoped_init_core_owner_symbols: set[str] = set()
         self._inline_subkernel_counter = 0
         self._escaped_inline_values: dict[object, tuple[str, str]] = {}
         self._physical_section_stack: list[tuple[str, object]] = []
@@ -204,6 +209,13 @@ class TraceSession:
         if current_record is not None:
             return current_record.module_spec
         return self.module_spec
+
+    @property
+    def current_physical_section_kind(self) -> str | None:
+        """Return the explicit physical section enclosing the current call site."""
+        if not self._physical_section_stack:
+            return None
+        return self._physical_section_stack[-1][0]
 
     @property
     def _function_symbol_table(self):
@@ -264,6 +276,13 @@ class TraceSession:
                 "section kind may appear at most once in a function"
             )
 
+    def record_unscoped_init_core(self) -> None:
+        """Record an implicit-Vector init and reject it for mixed kernels."""
+        owner_symbol = self.current_function_owner_symbol_name
+        if owner_symbol in self._physical_section_owner_symbols:
+            raise init_core_physical_section_required_error()
+        self._unscoped_init_core_owner_symbols.add(owner_symbol)
+
     @contextmanager
     def enter_physical_section(self, kind: str):
         """Create one explicit cube/vector section in the active function."""
@@ -278,6 +297,9 @@ class TraceSession:
             )
 
         function_key = self._physical_section_function_key()
+        owner_symbol = self.current_function_owner_symbol_name
+        if owner_symbol in self._unscoped_init_core_owner_symbols:
+            raise init_core_physical_section_required_error()
         if self.current_subkernel is not None:
             raise RuntimeError(
                 "pto.section() is not allowed inside a cube or simd subkernel body; "
@@ -306,6 +328,7 @@ class TraceSession:
                 finally:
                     self._physical_section_stack.pop()
                 self._record_physical_section_values(section_op, kind)
+            self._physical_section_owner_symbols.add(owner_symbol)
         except BaseException:
             if section_op.operation.parent is not None:
                 section_op.operation.erase()
@@ -443,9 +466,16 @@ class TraceSession:
 
     def _emit_simt_helper_launch_metadata(self) -> None:
         i32 = IntegerType.get_signless(32)
-        dim_z = arith.ConstantOp(i32, 1).result
-        dim_y = arith.ConstantOp(i32, 1).result
-        dim_x = arith.ConstantOp(i32, 1).result
+        one = IntegerAttr.get(i32, 1)
+        dim_z = Operation.create(
+            "pto.constant", results=[i32], attributes={"value": one}
+        ).results[0]
+        dim_y = Operation.create(
+            "pto.constant", results=[i32], attributes={"value": one}
+        ).results[0]
+        dim_x = Operation.create(
+            "pto.constant", results=[i32], attributes={"value": one}
+        ).results[0]
         _pto.StoreVfSimtInfoOp(dim_z, dim_y, dim_x)
 
     def _erase_attached_op(self, op_view) -> None:
@@ -774,6 +804,9 @@ class TraceSession:
         identity = func_template.__ptodsl_cache_signature__()
         if constexpr_bindings:
             identity = (identity, ("constexprs", tuple(constexpr_bindings)))
+        section_kind = self.current_physical_section_kind
+        if section_kind is not None:
+            identity = (identity, ("physical_section", section_kind))
         return HelperFunctionSpec(
             symbol_name=func_template.spec.symbol_name,
             arg_types=tuple(unwrap_surface_value(arg).type for arg in runtime_values),
@@ -1172,7 +1205,14 @@ class TraceSession:
 
     def get_or_create_helper_function(self, spec: HelperFunctionSpec, *, owner_symbol_name: str | None = None):
         """
-        Look up or create a helper ``func.func`` in the owning child module.
+        Look up or create a module-local helper in the owning child module.
+
+        This path serves regular ``@pto.func`` definitions, decorated TileOp
+        helpers, and outlined inline TileOp helpers.  All are implementation
+        details of one backend child and must remain private.  Kernel-module
+        primary functions use ``get_or_create_kernel_module_primary_function``
+        and stay externally visible.  Named SIMT helpers use their separate
+        ``pto.simt_entry`` creation path and backend linkage policy.
 
         Returns ``(helper_fn, created)`` where *created* reports whether a new
         symbol was emitted in this trace session.
@@ -1194,10 +1234,11 @@ class TraceSession:
         with InsertionPoint(symbol_table):
             helper = func.FuncOp(specialized_symbol_name, fn_ty)
             self._attach_ptodsl_logical_name_attr(helper, spec.symbol_name)
+            # A merged compilation emits every child as a separate fatobj, so
+            # equal helper specializations must have child-local linkage.
+            helper.attributes["sym_visibility"] = StringAttr.get("private")
             for attr_name, attr_value in spec.attributes:
                 helper.attributes[attr_name] = attr_value
-            if any(attr_name == "pto.tileop.helper" for attr_name, _ in spec.attributes):
-                helper.attributes["sym_visibility"] = StringAttr.get("private")
         self._helpers[cache_key] = helper
         return helper, True
 
@@ -1341,9 +1382,17 @@ def _coerce_i32_dim(value, *, context: str):
     if isinstance(raw_value, int):
         if raw_value < 0:
             raise ValueError(f"{context} expects a non-negative i32 launch dimension, got {raw_value}")
-        return arith.ConstantOp(i32, raw_value).result
+        return Operation.create(
+            "pto.constant", results=[i32],
+            attributes={"value": IntegerAttr.get(i32, raw_value)},
+        ).results[0]
     if IndexType.isinstance(raw_value.type):
-        return arith.IndexCastOp(i32, raw_value).result
+        return Operation.create(
+            "pto.index_cast", results=[i32], operands=[raw_value],
+            attributes={
+                "signedness": Attribute.parse("#pto.signedness<signed>")
+            },
+        ).results[0]
     if IntegerType.isinstance(raw_value.type):
         width = IntegerType(raw_value.type).width
         if width != 32:

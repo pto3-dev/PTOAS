@@ -229,13 +229,27 @@ is a `!pto.vmi.mask<L>` with the same `L` as the data operand.
 
 | `pmode` | Inactive lane behavior | Default? |
 |---|---|---|
-| `"zero"` | Inactive lanes produce 0 (hardware-native ZEROING) | ✓ (default) |
-| `"merge"` | Inactive lanes preserve the destination's prior value | |
+| `"zero"` | Inactive lanes produce 0 | ✓ (default, and the only supported value) |
 
-On A5, MERGE is **emulated**: the hardware predicates only in ZEROING mode, so the
-compiler synthesizes merge as a predicate complement plus a `vor`/`vsel` blend
-of the zeroed result with the old destination (see [Appendix C](10-appendices.md)).
-On A6, some ops support native MERGE.
+### Mask granularity assignment boundaries
+
+`vmi-mask-granularity-assignment` assigns concrete granularity to abstract `pred`
+values and records the granularity required at each supported use. A root without
+a concrete constraint or preference defaults to `b32`; a registered 8/16-bit use
+can still obtain a rematerialized mask or `ensure_mask_granularity`. Thus a `b32`
+root alone does not indicate a missing use constraint. Passes that change data
+width may explicitly bridge an already concrete mask with
+`ensure_mask_granularity`; this is distinct from assigning an abstract `pred`.
+
+The operation dispatch lists are maintained explicitly, not inferred from every
+mask operand in the dialect. Direct `vsel`, `vadd`, `vmul`, and `vcmp`/`vcmps`
+uses are covered. For `vcadd`/`vcmax`/`vcmin`, and `vgather`, run
+`vmi-lower-unified-to-legacy` first: directly assigning an unconstrained `pred`
+mask for f16 data still fails the data-width verifier. The corresponding f16
+`vgatherb` case remains a known gap even with that normalization. These gaps are
+recorded in `vmi_mask_granularity_assignment_boundaries.pto`; they are not intended
+rejection contracts. `pmode="merge"` is rejected by the VMI verifier before these
+passes and is not a supported workaround.
 
 **A5 load restriction**: `vload` has **no** mask operand — A5 loads are
 unpredicated. A logical tail mask associated with a load is never lowered as a
@@ -251,20 +265,25 @@ optional `{group=C}` attribute where `C` is the **number of groups** (not the
 per-group lane count):
 
 - **Reduce**: Splits `L` lanes into `C` groups, each producing one scalar.
-  Output is `V<C×T>` — a compact vector of `C` scalars.
-- **Broadcast**: Takes a compact `V<C×T>` and fans each scalar back across
-  `L/C` lanes, producing `V<L×T>`.
+  Output is `V<C×T>` with a group-slot layout. Native 16-bit integer `vcgadd`
+  uses `gs(8, 2)`; the logical scalars need not occupy consecutive lanes.
+- **Broadcast**: Takes `V<C×T>`, reads its assigned slot positions, and fans
+  each scalar back across `L/C` lanes, producing `V<L×T>`.
 
-Legal `C` values: `1`, `2`, `4`, `8` (must divide `L`; must match the result
-type's `C`).
+`C` must divide `L` and match the result type's `C`. The bounded one-carrier
+fallback supports `1`, `2`, `4`, `8`; native multi-carrier shapes can support
+more groups, with at most eight results per VCG packet. See [Reduce](05-reduce.md).
 
 **`group → Category` decision table** (W = bytes per sub-group):
 
 | W vs BlockLane (32B) | Category | Lowering |
 |---|---|---|
 | `W == 32B` (sub-group = 1 VLane) | B | `vcgadd`/`vcgmax`/`vcgmin` — one op per reg, no cross-reg combine |
-| `W > 32B`, aligned | B | Fold `(k-1)× vadd/vmax/vmin` then `vcg*` |
+| `W > 32B`, aligned | B | Native fragment reductions followed by a combine tree; equivalent-mask source folding is applied only when legal |
 | Unaligned | C | Materialize → contiguous → reduce |
+
+Native 16-bit integer sums combine their widened partial results with `b32`
+predicates. Their `vcgadd` boundary is preserved by the reduction combiner.
 
 ---
 

@@ -1,0 +1,155 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -pto-validate-vmi-layout-ir | FileCheck %s --check-prefix=ASSIGN
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -pto-validate-vmi-layout-ir -vmi-to-vpto | FileCheck %s --check-prefix=LOWER --implicit-check-not=pto.vpack --implicit-check-not=pto.vmi.
+
+// An explicitly assigned native result can leave the producer unchanged.
+// The companion consumer test checks automatic layout assignment.
+module {
+  // ASSIGN-LABEL: func.func @vcadd_i16_vl128_g8(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<8xi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  // LOWER-LABEL: func.func @vcadd_i16_vl128_g8(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_i16_vl128_g8(%x: !pto.vmi.vreg<128xi16, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<8xi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 8} : !pto.vmi.vreg<128xi16, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<8xi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    return %sum : !pto.vmi.vreg<8xi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_si16_vl64_g8(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  // LOWER-LABEL: func.func @vcadd_si16_vl64_g8(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_si16_vl64_g8(%x: !pto.vmi.vreg<64xsi16, #pto.vmi.layout<contiguous, lane_stride = 2>>, %mask: !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>>) -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 8} : !pto.vmi.vreg<64xsi16, #pto.vmi.layout<contiguous, lane_stride = 2>>, !pto.vmi.mask<64xb16, #pto.vmi.layout<contiguous, lane_stride = 2>> -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    return %sum : !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_ui16_vl256_g8(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  // LOWER-LABEL: func.func @vcadd_ui16_vl256_g8(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_ui16_vl256_g8(%x: !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>, %mask: !pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2>>) -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 8} : !pto.vmi.vreg<256xui16, #pto.vmi.layout<deinterleaved = 2>>, !pto.vmi.mask<256xb16, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    return %sum : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_si16_vl512_g8(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  // LOWER-LABEL: func.func @vcadd_si16_vl512_g8(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_si16_vl512_g8(%x: !pto.vmi.vreg<512xsi16, #pto.vmi.layout<deinterleaved = 4>>, %mask: !pto.vmi.mask<512xb16, #pto.vmi.layout<deinterleaved = 4>>) -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 8} : !pto.vmi.vreg<512xsi16, #pto.vmi.layout<deinterleaved = 4>>, !pto.vmi.mask<512xb16, #pto.vmi.layout<deinterleaved = 4>> -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    return %sum : !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_ui16_vl256_g16(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+  // LOWER-LABEL: func.func @vcadd_ui16_vl256_g16(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_ui16_vl256_g16(%x: !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<256xb16, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 16} : !pto.vmi.vreg<256xui16, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<256xb16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+    return %sum : !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_ui16_vl512_g16(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+  // LOWER-LABEL: func.func @vcadd_ui16_vl512_g16(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_ui16_vl512_g16(%x: !pto.vmi.vreg<512xui16, #pto.vmi.layout<deinterleaved = 2>>, %mask: !pto.vmi.mask<512xb16, #pto.vmi.layout<deinterleaved = 2>>) -> !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 16} : !pto.vmi.vreg<512xui16, #pto.vmi.layout<deinterleaved = 2>>, !pto.vmi.mask<512xb16, #pto.vmi.layout<deinterleaved = 2>> -> !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+    return %sum : !pto.vmi.vreg<16xui16, #pto.vmi.layout<num_groups = 16, slots = 8, lane_stride = 2>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcmax_si16_vl128_g8(
+  // ASSIGN: pto.vmi.group_reduce_maxi {{.*}} -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  // LOWER-LABEL: func.func @vcmax_si16_vl128_g8(
+  // LOWER: pto.vcgmax
+  // LOWER: return
+  func.func @vcmax_si16_vl128_g8(%x: !pto.vmi.vreg<128xsi16, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8>> {
+    %sum = pto.vmi.vcmax %x, %mask {group = 8} : !pto.vmi.vreg<128xsi16, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    return %sum : !pto.vmi.vreg<8xsi16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcmin_ui16_vl128_g8(
+  // ASSIGN: pto.vmi.group_reduce_mini {{.*}} -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  // LOWER-LABEL: func.func @vcmin_ui16_vl128_g8(
+  // LOWER: pto.vcgmin
+  // LOWER: return
+  func.func @vcmin_ui16_vl128_g8(%x: !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>> {
+    %sum = pto.vmi.vcmin %x, %mask {group = 8} : !pto.vmi.vreg<128xui16, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    return %sum : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_f16_vl128_g8(
+  // ASSIGN: pto.vmi.group_reduce_addf {{.*}} -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  // LOWER-LABEL: func.func @vcadd_f16_vl128_g8(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_f16_vl128_g8(%x: !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 8, reassoc} : !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    return %sum : !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_si16_vl8_g2(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<2xsi16, #pto.vmi.layout<num_groups = 2, slots = 1>>
+  // LOWER-LABEL: func.func @vcadd_si16_vl8_g2(
+  // LOWER: pto.vcadd
+  // LOWER: return
+  func.func @vcadd_si16_vl8_g2(%x: !pto.vmi.vreg<8xsi16, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<8xb16, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<2xsi16, #pto.vmi.layout<num_groups = 2, slots = 1>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 2} : !pto.vmi.vreg<8xsi16, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<8xb16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<2xsi16, #pto.vmi.layout<num_groups = 2, slots = 1>>
+    return %sum : !pto.vmi.vreg<2xsi16, #pto.vmi.layout<num_groups = 2, slots = 1>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_si16_vl128_g1(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<1xsi16, #pto.vmi.layout<num_groups = 1, slots = 1>>
+  // LOWER-LABEL: func.func @vcadd_si16_vl128_g1(
+  // LOWER: pto.vcadd
+  // LOWER: return
+  func.func @vcadd_si16_vl128_g1(%x: !pto.vmi.vreg<128xsi16, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<1xsi16, #pto.vmi.layout<num_groups = 1, slots = 1>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 1} : !pto.vmi.vreg<128xsi16, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<128xb16, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<1xsi16, #pto.vmi.layout<num_groups = 1, slots = 1>>
+    return %sum : !pto.vmi.vreg<1xsi16, #pto.vmi.layout<num_groups = 1, slots = 1>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_ui32_vl64_g8(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<8xui32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  // LOWER-LABEL: func.func @vcadd_ui32_vl64_g8(
+  // LOWER: pto.vcgadd
+  // LOWER: return
+  func.func @vcadd_ui32_vl64_g8(%x: !pto.vmi.vreg<64xui32, #pto.vmi.layout<contiguous>>, %mask: !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>>) -> !pto.vmi.vreg<8xui32, #pto.vmi.layout<num_groups = 8, slots = 8>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 8} : !pto.vmi.vreg<64xui32, #pto.vmi.layout<contiguous>>, !pto.vmi.mask<64xb32, #pto.vmi.layout<contiguous>> -> !pto.vmi.vreg<8xui32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+    return %sum : !pto.vmi.vreg<8xui32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  }
+
+  // ASSIGN-LABEL: func.func @vcadd_ui16_vl768_g12(
+  // ASSIGN: pto.vmi.group_reduce_addi {{.*}} -> !pto.vmi.vreg<12xui16, #pto.vmi.layout<num_groups = 12, slots = 8, lane_stride = 2>>
+  // LOWER-LABEL: func.func @vcadd_ui16_vl768_g12(
+  // LOWER: %[[MASK8:.*]] = pto.pset_b32 "PAT_VL8"
+  // LOWER-COUNT-4: pto.vcgadd
+  // LOWER-COUNT-3: pto.vadd {{.*}}, {{.*}}, %[[MASK8]] : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32>
+  // LOWER: %[[MASK4:.*]] = pto.pset_b32 "PAT_VL4"
+  // LOWER-COUNT-4: pto.vcgadd
+  // LOWER-COUNT-3: pto.vadd {{.*}}, {{.*}}, %[[MASK4]] : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32>
+  // LOWER: return
+  func.func @vcadd_ui16_vl768_g12(
+      %x: !pto.vmi.vreg<768xui16, #pto.vmi.layout<deinterleaved = 4>>,
+      %mask: !pto.vmi.mask<768xb16, #pto.vmi.layout<deinterleaved = 4>>)
+      -> !pto.vmi.vreg<12xui16, #pto.vmi.layout<num_groups = 12, slots = 8, lane_stride = 2>> {
+    %sum = pto.vmi.vcadd %x, %mask {group = 12}
+        : !pto.vmi.vreg<768xui16, #pto.vmi.layout<deinterleaved = 4>>,
+          !pto.vmi.mask<768xb16, #pto.vmi.layout<deinterleaved = 4>>
+        -> !pto.vmi.vreg<12xui16, #pto.vmi.layout<num_groups = 12, slots = 8, lane_stride = 2>>
+    return %sum : !pto.vmi.vreg<12xui16, #pto.vmi.layout<num_groups = 12, slots = 8, lane_stride = 2>>
+  }
+}

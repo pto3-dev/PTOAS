@@ -21,6 +21,12 @@ set(PTOAS_RUNTIME_SOURCES
   ObjectEmission.cpp
 )
 
+add_library(PTOASBishengScheduler STATIC BishengScheduler.cpp)
+llvm_update_compile_flags(PTOASBishengScheduler)
+set_target_properties(PTOASBishengScheduler PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(PTOASBishengScheduler PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(PTOASBishengScheduler PUBLIC LLVMSupport)
+
 add_library(PTOASVFSIMTSizePatcher STATIC
   VFSIMTSizePatcher.cpp
 )
@@ -80,6 +86,7 @@ set(PTOAS_RUNTIME_LINK_LIBS
   PTOIR
   PTOTransforms
   PTOASVFSIMTSizePatcher
+  PTOASBishengScheduler
   ptobc_lib
   MLIRMlirOptMain
   MLIRBufferizationTransforms
@@ -171,9 +178,20 @@ elseif(UNIX)
 endif()
 ptoas_append_editable_llvm_rpath(PTOASPythonCore)
 
+# declare_mlir_python_sources' SOURCES_GLOB resolves to a bare file(GLOB_RECURSE)
+# without CONFIGURE_DEPENDS, so the .py file list is captured only at configure
+# time. On an incrementally reused build tree (e.g. a persistent CI worker), a
+# newly added source is never re-globbed and its staging symlink is silently
+# missing, surfacing as a ModuleNotFoundError at runtime. Collect the sources
+# ourselves with CONFIGURE_DEPENDS and pass them via SOURCES so adding/removing
+# a .py under these roots forces a reconfigure.
+file(GLOB_RECURSE _ptoas_runtime_py_sources CONFIGURE_DEPENDS
+  RELATIVE "${CMAKE_SOURCE_DIR}/ptodsl/ptoas"
+  "${CMAKE_SOURCE_DIR}/ptodsl/ptoas/*.py"
+)
 declare_mlir_python_sources(PTOASRuntimePythonSources
   ROOT_DIR "${CMAKE_SOURCE_DIR}/ptodsl/ptoas"
-  SOURCES_GLOB "*.py"
+  SOURCES ${_ptoas_runtime_py_sources}
 )
 add_mlir_python_sources_target(PTOASRuntimePythonSourcesStage
   OUTPUT_DIRECTORY "${PTOAS_BUILD_PYTHON_PACKAGE_DIR}"
@@ -182,9 +200,13 @@ add_mlir_python_sources_target(PTOASRuntimePythonSourcesStage
 
 add_dependencies(PTOASRuntimePythonSourcesStage PTODSLPackageStage)
 
+file(GLOB_RECURSE _ptoas_tileops_py_sources CONFIGURE_DEPENDS
+  RELATIVE "${CMAKE_SOURCE_DIR}/lib/TileOps"
+  "${CMAKE_SOURCE_DIR}/lib/TileOps/*.py"
+)
 declare_mlir_python_sources(PTOASTileOpsPythonSources
   ROOT_DIR "${CMAKE_SOURCE_DIR}/lib/TileOps"
-  SOURCES_GLOB "*.py"
+  SOURCES ${_ptoas_tileops_py_sources}
 )
 add_mlir_python_sources_target(PTOASTileOpsPythonSourcesStage
   OUTPUT_DIRECTORY
@@ -192,9 +214,13 @@ add_mlir_python_sources_target(PTOASTileOpsPythonSourcesStage
   SOURCES_TARGETS PTOASTileOpsPythonSources
 )
 
+file(GLOB_RECURSE _ptoas_softops_py_sources CONFIGURE_DEPENDS
+  RELATIVE "${CMAKE_SOURCE_DIR}/lib/SoftOps"
+  "${CMAKE_SOURCE_DIR}/lib/SoftOps/*.py"
+)
 declare_mlir_python_sources(PTOASSoftOpsPythonSources
   ROOT_DIR "${CMAKE_SOURCE_DIR}/lib/SoftOps"
-  SOURCES_GLOB "*.py"
+  SOURCES ${_ptoas_softops_py_sources}
 )
 add_mlir_python_sources_target(PTOASSoftOpsPythonSourcesStage
   OUTPUT_DIRECTORY
@@ -462,4 +488,3 @@ if(PTOAS_ENABLE_ONLINE_CORE_COMPILE)
     endif()
   endforeach()
 endif()
-

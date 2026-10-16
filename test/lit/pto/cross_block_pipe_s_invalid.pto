@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a3 %t/a3_named.pto 2>&1 | FileCheck %s --check-prefix=A3
+// RUN: not ptoas --pto-arch=a5 %t/a5_mode2.pto 2>&1 | FileCheck %s --check-prefix=A5-MODE2
+// RUN: not ptoas --pto-arch=a5 %t/a5_set.pto 2>&1 | FileCheck %s --check-prefix=A5-SET
+
+//--- a3_named.pto
+module attributes {pto.target_arch = "a3"} {
+  func.func @a3_named() attributes {pto.kernel} {
+    pto.wait_cross_block <PIPE_S>, 14
+    return
+  }
+}
+
+// A3: 'pto.wait_cross_block' op pto.wait_cross_block expects pipe to be one of
+
+//--- a5_mode2.pto
+module attributes {pto.target_arch = "a5"} {
+  func.func @a5_mode2() attributes {pto.kernel} {
+    pto.sync.wait <PIPE_S>, 14 {ffts_mode = 2 : i32}
+    return
+  }
+}
+
+// A5-MODE2: 'pto.sync.wait' op A5 sync.wait supports <PIPE_S> only with ffts_mode = 0
+
+//--- a5_set.pto
+module attributes {pto.target_arch = "a5"} {
+  func.func @a5_set() attributes {pto.kernel} {
+    pto.set_cross_block <PIPE_S>, 14
+    return
+  }
+}
+
+// A5-SET: 'pto.set_cross_block' op pto.set_cross_block expects pipe to be one of

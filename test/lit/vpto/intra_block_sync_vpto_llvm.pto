@@ -23,8 +23,20 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
     return
   }
 
-  func.func @intra_block_sync_v_dynamic(%event_id: index) attributes {pto.kernel} {
-    pto.set_intra_block <PIPE_V>, %event_id
+  func.func @intra_block_sync_v_dynamic(%event_id: i32) attributes {pto.kernel} {
+    pto.set_intra_block <PIPE_V>, %event_id : i32
+    return
+  }
+
+  func.func @cross_block_sync_dynamic_i32(%event_id: i32) attributes {pto.kernel} {
+    pto.set_cross_block <PIPE_V>, %event_id : i32
+    pto.wait_cross_block <PIPE_V>, %event_id : i32
+    return
+  }
+
+  func.func @cross_block_sync_pipe_s() attributes {pto.kernel} {
+    pto.sync.set <PIPE_MTE3>, 14 {ffts_mode = 0 : i32}
+    pto.sync.wait <PIPE_S>, 14 {ffts_mode = 0 : i32}
     return
   }
 }
@@ -45,3 +57,14 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
 // CHECK-LABEL: llvm.func @intra_block_sync_v_dynamic_mix_aiv
 // CHECK: llvm.mlir.constant(1 : i64) : i64
 // CHECK: llvm.call @llvm.hivm.SET.INTRA.BLOCK.mode
+
+// CHECK-LABEL: llvm.func @cross_block_sync_dynamic_i32_mix_aiv
+// CHECK: llvm.call @llvm.hivm.SET.CROSS.CORE
+// CHECK: llvm.call @llvm.hivm.WAIT.FLAG.DEV.PIPE.REG
+
+// CHECK-LABEL: llvm.func @cross_block_sync_pipe_s_mix_aiv
+// CHECK: llvm.mlir.constant(5 : i64) : i64
+// CHECK: llvm.call @llvm.hivm.SET.CROSS.CORE
+// CHECK: llvm.mlir.constant(0 : i64) : i64
+// CHECK: llvm.mlir.constant(14 : i64) : i64
+// CHECK: llvm.call @llvm.hivm.WAIT.FLAG.DEV.PIPE.IMM

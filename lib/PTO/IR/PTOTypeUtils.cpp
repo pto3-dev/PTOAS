@@ -99,6 +99,33 @@ bool mlir::pto::isPTOLowPrecisionType(Type t) {
          isPTOBF16x2Type(t);
 }
 
+static bool isSupportedPTOPointerScalarElementType(Type t) {
+  bool isSupportedFloat = t.isF16() || t.isBF16() || t.isF32() || t.isF64();
+  if (isSupportedFloat || isPTOLowPrecisionType(t)) {
+    return true;
+  }
+  auto integer = dyn_cast<IntegerType>(t);
+  if (!integer) {
+    return false;
+  }
+  unsigned width = integer.getWidth();
+  return width == mlir::pto::kValue8 || width == mlir::pto::kValue16 ||
+         width == mlir::pto::kValue32 || width == mlir::pto::kValue64;
+}
+
+bool mlir::pto::isSupportedPTOPointerElementType(Type t) {
+  if (!t) {
+    return false;
+  }
+  if (isSupportedPTOPointerScalarElementType(t)) {
+    return true;
+  }
+  auto vector = dyn_cast<VectorType>(t);
+  return vector && !vector.isScalable() && vector.getRank() == 1 &&
+         vector.getDimSize(0) > 0 &&
+         isSupportedPTOPointerScalarElementType(vector.getElementType());
+}
+
 unsigned mlir::pto::getPTOStorageElemBitWidth(Type t) {
   if (isPTOHiFloat8x2Type(t)) {
     return mlir::pto::kValue16;
@@ -123,4 +150,19 @@ unsigned mlir::pto::getPTOStorageElemBitWidth(Type t) {
 unsigned mlir::pto::getPTOStorageElemByteSize(Type t) {
   unsigned bitWidth = getPTOStorageElemBitWidth(t);
   return bitWidth == 0 ? 0 : bitWidth / kBitsPerByte;
+}
+
+std::optional<int64_t> mlir::pto::convC0ForElemBytes(int64_t elemBytes) {
+  switch (elemBytes) {
+  case 1:
+    return 32;
+  case 2:
+    return 16;
+  case 4:
+    return 8;
+  case 8:
+    return 4;
+  default:
+    return std::nullopt;
+  }
 }

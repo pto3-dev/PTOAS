@@ -59,37 +59,6 @@ def VMILayoutAttr : PTO_Attr<"VMILayout", "vmi.layout"> {
 }
 
 //===----------------------------------------------------------------------===//
-// VMI Predication Mode — [pmode]
-// Controls inactive/predicated-off lane behavior on vector operations.
-//===----------------------------------------------------------------------===//
-
-def VMI_PMode_Merge : I32EnumAttrCase<"Merge", 0, "merge">;
-def VMI_PMode_Zero  : I32EnumAttrCase<"Zero",  1, "zero">;
-def VMIPredicationMode : I32EnumAttr<"PredicationMode",
-    "VMI predication mode: merge (keep old value) or zero (fill with 0)", [
-  VMI_PMode_Merge, VMI_PMode_Zero
-]> {
-  let cppNamespace = "::mlir::pto";
-}
-
-//===----------------------------------------------------------------------===//
-// VMI Distribution Mode — {dist-mode}
-// Controls the data-layout interpretation of load/store operations.
-//===----------------------------------------------------------------------===//
-
-def VMI_DistMode_Continuous : I32EnumAttrCase<"Continuous", 0, "continuous">;
-def VMI_DistMode_Dintlv     : I32EnumAttrCase<"Dintlv",     2, "dintlv">;
-def VMI_DistMode_Intlv      : I32EnumAttrCase<"Intlv",      3, "intlv">;
-def VMI_DistMode_Brc        : I32EnumAttrCase<"Brc",        4, "brc">;
-def VMIDistMode : I32EnumAttr<"DistMode",
-    "VMI distribution mode for load/store", [
-  VMI_DistMode_Continuous, VMI_DistMode_Dintlv,
-  VMI_DistMode_Intlv, VMI_DistMode_Brc
-]> {
-  let cppNamespace = "::mlir::pto";
-}
-
-//===----------------------------------------------------------------------===//
 // VMI Rounding Mode — {rnd=}
 // Controls the rounding direction for narrowing convert operations.
 //===----------------------------------------------------------------------===//

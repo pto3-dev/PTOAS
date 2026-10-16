@@ -98,7 +98,8 @@ static void MergeSyncList(SyncOps &dstList, const SyncOps &srcList) {
   }
 }
 
-static Operation *resolveSyncInsertAnchor(Operation *op, SyncOperation *sync) {
+static Operation *resolveSyncInsertAnchor(Operation *op,
+                                          const SyncOperation *sync) {
   if (!sync->isCompensation) {
     return op;
   }
@@ -106,9 +107,10 @@ static Operation *resolveSyncInsertAnchor(Operation *op, SyncOperation *sync) {
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     if (!ifOp.elseBlock()) {
       OpBuilder builder(ifOp.getContext());
-      Block *elseBlock = new Block();
-      ifOp.getElseRegion().push_back(elseBlock);
-      builder.setInsertionPointToEnd(elseBlock);
+      auto elseBlock = std::make_unique<Block>();
+      ifOp.getElseRegion().push_back(elseBlock.get());
+      builder.setInsertionPointToEnd(elseBlock.get());
+      (void)elseBlock.release();
       builder.create<scf::YieldOp>(ifOp.getLoc());
     }
     return ifOp.getElseRegion().front().getTerminator();
@@ -153,7 +155,7 @@ static bool hasNeighborBarrier(Block *block, Block::iterator ip,
 }
 
 static void createSetOrWaitFlagOp(IRRewriter &rewriter, Operation *op,
-                                  SyncOperation *sync, pto::PipeAttr srcPipe,
+                                  const SyncOperation *sync, pto::PipeAttr srcPipe,
                                   pto::PipeAttr dstPipe,
                                   pto::EventAttr eventId) {
   if (sync->isSyncWaitType()) {
@@ -171,13 +173,13 @@ void SyncCodegen::Run() {
   MLIRContext *ctx = func_->getContext();
   IRRewriter rewriter(ctx);
 
-  UpdateOpInsertSync(rewriter);
+  UpdateOpInsertSync();
 
   // [Optional Debug] 这里的 Debug 打印可以保留或注释掉
   // ...
 
   func_->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    if (op2InsertSync.count(op)) {
+    if (op2InsertSync.contains(op)) {
       // 处理 PRE Sync
       for (auto &syncBefore : op2InsertSync[op].pipeBefore) {
         SyncInsert(rewriter, op, syncBefore, true);
@@ -194,7 +196,7 @@ void SyncCodegen::Run() {
   AppendAutoSyncTailBarrierIfNeeded(rewriter);
 }
 
-void SyncCodegen::UpdateOpInsertSync(const IRRewriter &rewriter) {
+void SyncCodegen::UpdateOpInsertSync() {
   for (auto &nowElement : syncIR_) {
     if (auto *compoundElement = dyn_cast<CompoundInstanceElement>(nowElement.get())) {
       UpdateCompoundOpInsertSync(compoundElement);
@@ -246,9 +248,10 @@ void SyncCodegen::updatePlaceHolderOpInsertSync(PlaceHolderInstanceElement *plac
           // 只有当确实有 Sync 指令需要插入时才创建
           if (!placeHolder->pipeBefore.empty() || !placeHolder->pipeAfter.empty()) {
                Region &elseRegion = ifOp.getElseRegion();
-               Block *elseBlock = new Block();
-               elseRegion.push_back(elseBlock);
-               builder.setInsertionPointToEnd(elseBlock);
+               auto elseBlock = std::make_unique<Block>();
+               elseRegion.push_back(elseBlock.get());
+               builder.setInsertionPointToEnd(elseBlock.get());
+               (void)elseBlock.release();
                builder.create<scf::YieldOp>(ifOp.getLoc());
           }
       }
@@ -292,6 +295,46 @@ void SyncCodegen::SyncInsert(IRRewriter &rewriter, Operation *op,
   if (sync->GetType() == SyncOperation::TYPE::PIPE_BARRIER) {
     CreateBarrierOp(rewriter, insertAnchorOp, sync, forceBefore);
   } else if (sync->isSyncSetType() || sync->isSyncWaitType()) {
+    // A set/wait hazard with NO event id has no mechanism realised: nothing below
+    // will emit anything for it, and the hazard's ordering simply vanishes from the
+    // kernel. That must be LOUD.
+    //
+    // It used to be silent, and it was reachable two ways. (1) The multi-id fallback
+    // iterates `eventIds` -- zero ids means zero flags emitted, then `return`.
+    // (2) `--unified-sync-force-mechanism=bufid` stamps MECHANISM::BUFID, which makes
+    // `colorEventIds` skip the hazard, while nothing routes a buffer for it -- so the
+    // pair arrived here empty and disappeared, with ptoas exiting 0 and every gate
+    // reporting clean. Those are one defect, not two.
+    //
+    // "No id" is never a resting state: a hazard must end on SOME mechanism -- an
+    // event id, a buffer token, or a barrier -- which is exactly what
+    // `Hazard::SpillToBarrier` exists to guarantee (it converts the hazard AND
+    // suppresses its synthesised compensation, because `SetEventId` stamps all four
+    // ops alike). This guard is what makes that invariant checked rather than assumed:
+    // the synthesised compensation lives in `pipeBefore`/`pipeAfter`, the two containers the
+    // incumbent's own degradation ladder does not walk, so nothing else would catch a
+    // future path that left one live and unstamped.
+    //
+    // Reachability on the shipping path was traced and adversarially reviewed:
+    // `--enable-insert-sync` cannot arrive here empty, because the backward-match
+    // synthetics are always stamped with an id before being published into the sync
+    // lists. So this is hardening for the unified path, not a fix to insert-sync.
+    //
+    // DELIBERATELY NO ASSERT. An assertion ahead of the diagnostic aborts an
+    // assertions build at precisely the point this guard exists to report, so the
+    // negative test that pins the message sees a crash instead. Failure propagates
+    // through `sawUnrealisedHazard_`, which the unified pass turns into
+    // signalPassFailure, and that works identically with assertions on or off.
+    if (sync->eventIds.empty()) {
+          sawUnrealisedHazard_ = true;
+          func_.emitError() << "sync codegen: a " << SyncOperation::TypeName(sync->GetType()) << " hazard (src pipe "
+                            << int(sync->GetActualSrcPipe()) << " -> dst pipe " << int(sync->GetActualDstPipe())
+                            << ", syncIndex " << sync->GetSyncIndex()
+                            << ") reached emission with no event id, so no mechanism was realised for it "
+                               "and its ordering would be silently dropped. A hazard must end on an "
+                               "event id, a buffer token, or a barrier.";
+          return;
+    }
     if (sync->eventIds.size() == 1) {
       CreateSetWaitOpForSingleBuffer(rewriter, insertAnchorOp, sync, forceBefore);
     } else {
@@ -360,7 +403,7 @@ void SyncCodegen::AppendAutoSyncTailBarrierIfNeeded(IRRewriter &rewriter) {
 void SyncCodegen::CreateSetWaitOpForSingleBuffer(IRRewriter &rewriter,
                                                  Operation *op,
                                                  SyncOperation *sync,
-                                                 bool beforeInsert) {
+                                                 bool beforeInsert) const {
   setSyncInsertionPoint(rewriter, op,
                         beforeInsert || op->hasTrait<OpTrait::IsTerminator>());
   auto srcPipe = getPipeAttr(rewriter, sync->GetActualSrcPipe());
@@ -372,7 +415,7 @@ void SyncCodegen::CreateSetWaitOpForSingleBuffer(IRRewriter &rewriter,
 void SyncCodegen::CreateSetWaitOpForMultiBuffer(IRRewriter &rewriter,
                                                 Operation *op,
                                                 SyncOperation *sync,
-                                                bool beforeInsert) {
+                                                bool beforeInsert) const {
   auto srcPipe = getPipeAttr(rewriter, sync->GetActualSrcPipe());
   auto dstPipe = getPipeAttr(rewriter, sync->GetActualDstPipe());
   setSyncInsertionPoint(rewriter, op,
@@ -384,8 +427,26 @@ void SyncCodegen::CreateSetWaitOpForMultiBuffer(IRRewriter &rewriter,
   // fall back to a static set/wait on the first event id. This preserves
   // correctness at the cost of forgoing per-slot pipelining.
   if (!sync->slotSSAExpr || sync->eventIds.empty()) {
-    auto eventId = getEventAttr(rewriter, sync->eventIds[0]);
-    createSetOrWaitFlagOp(rewriter, op, sync, srcPipe, dstPipe, eventId);
+    // A MULTI-ID OP WITH NO SLOT SSA MUST EMIT ONE FLAG PER ID, NOT ONE FLAG.
+    // This is the loop-carried COMPENSATION of a rotating hazard: the head/tail
+    // are synthesised, so they have no slot expression, but the in-body pair they
+    // prime is `wait_flag_dyn` selecting eventIds[slot % N]. Priming only
+    // eventIds[0] leaves every other slot's flag unset, and the first iteration
+    // that lands on slot != 0 BLOCKS FOREVER -- the iteration-1 deadlock the carried
+    // exists to catch, reintroduced through the rotation path.
+    //
+    // The incumbent reaches the same emitted shape by a different route: its
+    // `UpdateBackwardMatchSync(setFlag, waitFlag, eventId)` takes ONE id and
+    // builds one compensation pair PER id, so each of its head ops carries a
+    // single id and never lands here. Ours carries the whole id list on one pair
+    // (SetEventIds stamps all four ops alike), so the fan-out happens here.
+    // Either way the emitted IR is d static flags -- verified identical.
+    //
+    // Ops with exactly one id are unaffected.
+    for (int id : sync->eventIds) {
+      auto eventId = getEventAttr(rewriter, id);
+      createSetOrWaitFlagOp(rewriter, op, sync, srcPipe, dstPipe, eventId);
+    }
     return;
   }
 
@@ -430,7 +491,7 @@ void SyncCodegen::CreateSetWaitOpForMultiBuffer(IRRewriter &rewriter,
 
 Value SyncCodegen::GetBufferSelected(IRRewriter &rewriter, Operation *op,
                                      SyncOperation *sync) {
-  if (SyncIndex2SelectBuffer.count(sync->GetSyncIndex())) {
+  if (SyncIndex2SelectBuffer.contains(sync->GetSyncIndex())) {
     return SyncIndex2SelectBuffer[sync->GetSyncIndex()];
   }
 
@@ -440,7 +501,7 @@ Value SyncCodegen::GetBufferSelected(IRRewriter &rewriter, Operation *op,
   }
 
   Value counter;
-  if (loop2BufferCounter.count(parentLoop)) {
+  if (loop2BufferCounter.contains(parentLoop)) {
     counter = loop2BufferCounter[parentLoop];
   } else {
     rewriter.setInsertionPointToStart(parentLoop.getBody());

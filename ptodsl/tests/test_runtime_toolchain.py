@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -36,6 +37,13 @@ class RuntimeToolchainTest(unittest.TestCase):
             toolchain._append_include_flag(flags, include_dir)
 
             self.assertEqual(flags, [f"-I{include_dir}"])
+
+    def test_bisheng_extra_flags_come_from_environment(self):
+        with mock.patch.dict(os.environ, {"BISHENG_FLAGS": "--gcc-toolchain=/usr -Winvalid-pch"}, clear=True):
+            self.assertEqual(
+                toolchain.bisheng_extra_flags(),
+                ["--gcc-toolchain=/usr", "-Winvalid-pch"],
+            )
 
     def test_a2_a3_use_c220_aicore_arch(self):
         self.assertEqual(

@@ -541,81 +541,50 @@ NOTE: These third-party ops are supported only to the extent required by PTOAS f
 
 ### 4.1 Pointer & View Operations
 
-##### `pto.ptrtoint` - Convert Pointer to Byte Address
+##### `pto.castptr` - Convert Pointer Representations
 
-**Summary:** Converts a global pointer to an `i64` byte address.
+**Summary:** Converts between a typed PTO pointer and an `i64` byte address, or reinterprets the element type of a pointer within the same memory space.
 
 **Semantics:**
 
 ```
-result = reinterpret_cast<i64>(ptr)
+ptr -> i64: result = byte_address(ptr)
+i64 -> ptr: result = pointer<T, space>(address)
+ptr<T1, space> -> ptr<T2, space>: result = reinterpret_pointer<T2>(ptr)
 ```
 
 If the source is produced by `pto.addptr`, the addptr offset is materialized as an explicit byte offset:
 
 ```
-pto.ptrtoint(pto.addptr %p, %idx) == pto.ptrtoint(%p) + idx * sizeof(elementType)
+pto.castptr(pto.addptr %p, %idx) == pto.castptr(%p) + idx * sizeof(elementType)
 ```
 
 **Arguments:**
 
 | Name | Type | Description |
 |------|------|-------------|
-| `ptr` | `!pto.ptr<elementType>` | Source global pointer |
+| `input` | `i64`, `memref`, or `!pto.ptr<elementType, space>` | Source address or pointer-like value |
 
-**Results:** `i64`
+**Results:** `i64` or `!pto.ptr<resultElementType, space>`
 
-**Lowering Notes:**
-
-- PTO view lowering accepts either PTO pointer form or the lowered rank-1 GM memref form.
-- `pto.addptr` sources are folded into explicit byte-address arithmetic before EmitC lowering.
-- EmitC lowering emits a C++ `reinterpret_cast<int64_t>`.
-
-##### `pto.inttoptr` - Convert Byte Address to Pointer
-
-**Summary:** Converts an `i64` byte address to a global pointer of the requested element type.
-
-**Semantics:**
-
-```
-result = reinterpret_cast<result-element-type *>(addr)
-```
-
-This op is an escape hatch for explicit byte-address arithmetic and
-cross-element-type pointer reinterpretation.
-
-To limit provenance loss from integer-derived pointers, the result is
-restricted to scalar memory access: every direct use must be the pointer operand
-of `pto.load_scalar` or `pto.store_scalar`. The result cannot feed
-`pto.addptr`, `pto.make_tensor_view`, returns, or other general pointer users.
-Use the offset operand on `pto.load_scalar` / `pto.store_scalar` for element
-offsets from an `inttoptr` pointer.
-
-The result element type must be representable by EmitC scalar pointer lowering:
-floating-point element types (`f16`, `bf16`, `f32`, `f64`), 8/16/32/64-bit
-integer element types, and PTO low-precision floating-point element types are
-accepted. Non-scalar element types such as `index` are rejected by the verifier.
+Pointer-to-pointer conversion must preserve the memory space. The operation
+changes only the pointer's element interpretation; it does not move data.
 
 **Arguments:**
 
 | Name | Type | Description |
 |------|------|-------------|
-| `addr` | `i64` | Source byte address |
+| `input` | `i64`, `memref`, or `!pto.ptr<T, space>` | Source address or pointer-like value |
 
-**Results:** `!pto.ptr<resultElementType>`
-
-**Lowering Notes:**
-
-- PTO view lowering rewrites the result to an equivalent rank-1 GM memref form.
-- EmitC lowering emits a C++ `reinterpret_cast<__gm__ T*>`.
+**Results:** `i64` or `!pto.ptr<resultElementType, space>`
 
 **Basic Example:**
 
 ```mlir
 %p64_off = pto.addptr %p64, %idx : !pto.ptr<ui64> -> !pto.ptr<ui64>
-%addr = pto.ptrtoint %p64_off : !pto.ptr<ui64> -> i64
-%p32 = pto.inttoptr %addr : i64 -> !pto.ptr<ui32>
-%val = pto.load_scalar %p32[%c0] : !pto.ptr<ui32> -> ui32
+%addr = pto.castptr %p64_off : !pto.ptr<ui64> -> i64
+%p32 = pto.castptr %addr : i64 -> !pto.ptr<ui32>
+%val = pto.load %p32[%c0] : !pto.ptr<ui32> -> ui32
 ```
 
 ##### `pto.addptr` - Add Element Offset to Pointer
@@ -713,6 +682,8 @@ This operation defines the physical "base" and stride rules for global memory. I
 - The operation has a custom verifier that checks:
   - `ptr` must be `!pto.ptr<...>` and its element type must match the result element type
   - `shape` and `strides` operand counts must match the tensor_view rank
+  - If `layout` is provided with static shapes/strides, it must be consistent
+    with inferred layout
   - Explicit ND/DN are preserved and are not replaced by shape/stride pattern
     inference
   - Explicit NZ must keep rank 5, `shape[0] == 1`, the complete
@@ -1518,7 +1489,7 @@ pto.tstore ins(%acc : !pto.tile_buf<loc=acc, dtype=i32, rows=32, cols=32, v_row=
 
 ---
 
-##### `pto.load_scalar` - Load Single Scalar Element
+##### `pto.load` - Load Single Scalar Element
 
 **Summary:** Loads a single scalar element from a pointer at the given offset.
 
@@ -1549,12 +1520,12 @@ value = ptr[offset]
 **Basic Example:**
 
 ```mlir
-%val = pto.load_scalar %ptr[%offset] : !pto.ptr<f32> -> f32
+%val = pto.load %ptr[%offset] : !pto.ptr<f32> -> f32
 ```
 
 ---
 
-##### `pto.store_scalar` - Store Single Scalar Element
+##### `pto.store` - Store Single Scalar Element
 
 **Summary:** Stores a single scalar element to a pointer at the given offset.
 
@@ -1586,7 +1557,7 @@ ptr[offset] = value
 **Basic Example:**
 
 ```mlir
-pto.store_scalar %val, %ptr[%offset] : !pto.ptr<f32>, f32
+pto.store %val, %ptr[%offset] : !pto.ptr<f32>, f32
 ```
 
 ---
@@ -3249,7 +3220,8 @@ The valid region is the intersection of each tile's valid rectangle defined by `
   - All three tiles must use row-major layout (`blayout=row_major`).
   - The implementation requires at least one input's valid region to match `dst`'s valid region, and the other input's valid region not greater than `dst`'s valid region (otherwise it asserts).
 - **Implementation checks (A5)**
-  - `dst/src0/src1` element types must be identical and must be one of: `i8`, `i16`, `i32`, `f16`, `bf16`, `f32`.
+  - `dst/src0/src1` element types must be identical and must be one of: `i16`, `i32`, `f16`, `bf16`, `f32`.
+    - The 8-bit forms (`i8`/`ui8`) are rejected: the A5 multiply profile has no 8-bit form (`pto.vmul` on A5 accepts `i16-i32`/`f16`/`bf16`/`f32`; see the micro Instruction SPEC, binary vector ops).
   - Requires `src0` and `src1` valid region to be `<= dst` valid region in both dimensions; other patterns are not supported (target-defined behavior).
 
 **Hardware Mapping:**
@@ -5579,14 +5551,24 @@ Broadcast values across rows or columns. All execute on the **Vector pipeline** 
 | `pto.tcolexpandexpdif` | `dst[i,j] = exp(src0[i,j] - src1[0,j])` |
 | `pto.tcolexpandmax` | `dst[i,j] = max(src0[i,j], src1[0,j])` |
 | `pto.tcolexpandmin` | `dst[i,j] = min(src0[i,j], src1[0,j])` |
-| `pto.trowexpandmul` | `dst[i,j] = src0[i,j] * src1[i,0]` |
-| `pto.trowexpanddiv` | `dst[i,j] = src0[i,j] / src1[i,0]` |
-| `pto.trowexpandsub` | `dst[i,j] = src0[i,j] - src1[i,0]` |
-| `pto.trowexpandadd` | `dst[i,j] = src0[i,j] + src1[i,0]` |
-| `pto.trowexpandexpdif` | `dst[i,j] = exp(src0[i,j] - src1[i,0])` |
-| `pto.trowexpandmax` | `dst[i,j] = max(src0[i,j], src1[i,0])` |
-| `pto.trowexpandmin` | `dst[i,j] = min(src0[i,j], src1[i,0])` |
+| `pto.trowexpandmul` | `dst[i,j] = src0[i,j] * src1[i, c(j)]` |
+| `pto.trowexpanddiv` | `dst[i,j] = src0[i,j] / src1[i, c(j)]` |
+| `pto.trowexpandsub` | `dst[i,j] = src0[i,j] - src1[i, c(j)]` |
+| `pto.trowexpandadd` | `dst[i,j] = src0[i,j] + src1[i, c(j)]` |
+| `pto.trowexpandexpdif` | `dst[i,j] = exp(src0[i,j] - src1[i, c(j)])` |
+| `pto.trowexpandmax` | `dst[i,j] = max(src0[i,j], src1[i, c(j)])` |
+| `pto.trowexpandmin` | `dst[i,j] = min(src0[i,j], src1[i, c(j)])` |
 | `pto.texpands` | Broadcast scalar to all elements of dst |
+
+> `c(j)` selects the expanded operand's column, matching `pto-isa`'s two row-expand modes:
+> `c(j) = 0` when it is `ColMajor` with exactly one column (Mode 1), and
+> `c(j) = j % B` when it is `RowMajor` with `B = 32 / sizeof(dtype)` columns
+> (Mode 2, where the 32-byte block repeats across the row).
+>
+> Both families accept the expanded operand in either input: the full-sized operand is the
+> one whose `valid_shape` matches `dst`, with `src0` taking precedence when both do (as in
+> `pto-isa`'s `src0eqdst`). The formulas above use `%src1` as the expanded operand; otherwise
+> swap the two roles while keeping the authored order `src0 OP src1`.
 
 For `pto.trowexpandadd/trowexpandsub/trowexpandmul/trowexpandmax/trowexpandmin`
 and `pto.tcolexpandadd/tcolexpandsub/tcolexpandmul/tcolexpandmax/tcolexpandmin`,
@@ -5603,7 +5585,7 @@ accepted as a compatibility placeholder and may be smaller than the data tiles.
 
 For `pto.trowexpandexpdif/max/min`, PTO IR requires one source to match
 `dst valid_shape` and the other to be a per-row scalar vector. When the A3
-tmp-taking form is used, that scalar-vector operand must use a non-row-major
+tmp-taking form is used, the expanded operand must use a non-row-major
 layout. When `tmp` is present, it must have the same element type as `dst`.
 
 ---
@@ -5750,9 +5732,9 @@ pto.tcolexpandmul ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]`.
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 **Hardware Mapping:**
 
 - Executes on the **Vector pipeline** (`PIPE_V`)
@@ -5807,9 +5789,9 @@ pto.tcolexpanddiv ins(<src0>, <src1> : <src0_type>, <src1_type>)
 - **Implementation checks**:
   - `src0`, `src1`, `dst` must share the same element type.
   - The shared element type must be `f16` or `f32`.
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]` (one scalar per destination column).
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -5867,9 +5849,9 @@ pto.tcolexpandsub ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]` (one scalar per destination column).
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -5927,9 +5909,9 @@ pto.tcolexpandmax ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]`.
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -5987,9 +5969,9 @@ pto.tcolexpandmin ins(<src0>, <src1> : <src0_type>, <src1_type>)
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same shape and the same `valid_shape`.
+  - The operand whose `valid_shape` matches `dst` (`src0` when both match) must have `dst`'s shape and `valid_shape`; the other operand carries the broadcast row.
   - `src0`, `src1`, `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[1]` must equal `dst valid_shape[1]`.
+  - The broadcast operand's `valid_shape[1]` must equal `dst valid_shape[1]` (one logical scalar per destination column).
 
 **Hardware Mapping:**
 
@@ -6020,7 +6002,10 @@ pto.tcolexpandmin ins(%src0, %src1 : !pto.tile_buf<loc=vec, dtype=f32, rows=16, 
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] * src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] * src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6083,7 +6068,10 @@ pto.trowexpandmul ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] / src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] / src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6147,7 +6135,10 @@ pto.trowexpanddiv ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] - src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] - src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6212,7 +6203,10 @@ pto.trowexpandsub ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = src0[i, j] + src1[i, 0]
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = src0[i, j] + src1[i, j % B]
 ```
 
 **Arguments:**
@@ -6239,11 +6233,11 @@ pto.trowexpandadd ins(<src0>, <src1> [, <tmp>] : <src0_type>, <src1_type> [, <tm
   - Element type:
     - A2/A3: `i16`, `i32`, `f16`, `f32`
     - A5: `i8`, `i16`, `i32`, `f16`, `f32`
-  - `src0` and `dst` must have the same `valid_shape`.
-  - `src0` and `dst` must use row-major layout (`blayout=row_major`).
-  - `src1 valid_shape[0]` must equal `dst valid_shape[0]`.
-  - If `src1` is row-major: `src1 valid_shape[1] == 32 / sizeof(dtype)` (`16` for `f16`, `8` for `f32`).
-  - If `src1` is not row-major: `src1 valid_shape[1] == 1`.
+  - One of `src0` / `src1` must match `dst valid_shape`; the other is the row-expanded operand.
+  - The full-sized operand and `dst` must use row-major layout (`blayout=row_major`).
+  - The row-expanded operand's `valid_shape[0]` must equal `dst valid_shape[0]`.
+  - If it is row-major: `valid_shape[1] == 32 / sizeof(dtype)` (`16` for `f16`, `8` for `f32`).
+  - Otherwise: `valid_shape[1] == 1`.
 - When `tmp` is present:
   - PTO IR does not require `tmp` to match the shape or valid shape of `src0` / `src1` / `dst`.
   - On A5, `tmp` is accepted as a compatibility placeholder and is not consumed by the current implementation.
@@ -6271,13 +6265,16 @@ pto.trowexpandadd ins(%src0, %src1 : !pto.tile_buf<loc=vec, dtype=f32, rows=16, 
 
 ##### `pto.trowexpandexpdif` - Row-wise Broadcast Exp-Difference
 
-**Summary:** Computes `exp(src0[i, j] - src1[i, 0])` using a per-row scalar vector.
+**Summary:** Computes `exp(src0[i, j] - src1[i, c(j)])` using a row-broadcast operand (see `c(j)` above: one scalar per row for a single-column `ColMajor` `src1`, or the repeating 32-byte block for a `RowMajor` `src1`).
 
 **Semantics:**
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = exp(src0[i, j] - src1[i, 0])
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = exp(src0[i, j] - src1[i, j % B])
 ```
 
 **Arguments:**
@@ -6346,7 +6343,10 @@ pto.trowexpandexpdif ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, 
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = max(src0[i, j], src1[i, 0])
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = max(src0[i, j], src1[i, j % B])
 ```
 
 **Arguments:**
@@ -6417,7 +6417,10 @@ pto.trowexpandmax ins(%src0, %src1, %tmp : !pto.tile_buf<loc=vec, dtype=f32, row
 
 ```
 For each element (i, j):
+    # Mode 1 (src1 ColMajor, 1 column), B = 32 / sizeof(dtype):
     dst[i, j] = min(src0[i, j], src1[i, 0])
+    # Mode 2 (src1 RowMajor, B columns -- the 32-byte block repeats):
+    dst[i, j] = min(src0[i, j], src1[i, j % B])
 ```
 
 **Arguments:**
@@ -7628,7 +7631,7 @@ pto.tconcatidx ins(%src0, %src1, %idx0, %idx1 :
 **Summary:** Gathers elements from a source tile using one of three PTO-ISA-compatible forms:
 
 - index gather: `src + indices[+ tmp] -> dst`
-- compare gather: `src + kValue + tmp -> dst + cdst`
+- compare gather: `src + kValue[+ tmp] -> dst + cdst`
 - mask-pattern gather: `src + maskPattern -> dst`
 
 **Semantics:**
@@ -7653,7 +7656,7 @@ Mask form:
 | `dst` | `pto.tile_buf` | Main destination tile |
 | `cdst` | `Optional<pto.tile_buf>` | Secondary destination tile used only by compare form |
 | `indices` | `Optional<pto.tile_buf>` | Index tile used only by index form |
-| `tmp` | `Optional<pto.tile_buf>` | Temporary tile used by compare form; optionally used by index form on A2/A3 (required), A5 (optional) |
+| `tmp` | `Optional<pto.tile_buf>` | Temporary tile for index/compare forms; level1/level2 allocate omitted scratch as needed |
 | `kValue` | `Optional<scalar>` | Scalar compare value used only by compare form |
 | `maskPattern` | `Optional<MaskPatternAttr>` | Mask pattern used only by mask form |
 | `cmpMode` | `Optional<CmpModeAttr>` | Compare mode used only by compare form; defaults to `eq` when omitted |
@@ -7665,17 +7668,17 @@ Mask form:
 - Compare form writes both `dst` and `cdst`
 - Mask form writes `dst`
 
-Note: the compare-form C++ API is spelled as `TGATHER(dst, src, k_value, cdst, tmp)`, but in PTO IR the writable operands are grouped under `outs(...)`, so `cdst` appears in `outs(...)` rather than `ins(...)`.
+In compare form, both writable operands, `dst` and `cdst`, appear in `outs(...)`.
 
 **Assembly Format:**
 
 ```mlir
-// index + tmp
-pto.tgather ins(%src, %indices, %tmp : !pto.tile_buf<...>, !pto.tile_buf<...>, !pto.tile_buf<...>)
+// index form, with optional tmp
+pto.tgather ins(%src, %indices[, %tmp] : !pto.tile_buf<...>, !pto.tile_buf<...>[, !pto.tile_buf<...>])
            outs(%dst : !pto.tile_buf<...>)
 
-// compare + tmp
-pto.tgather ins(%src, %kValue, %tmp : !pto.tile_buf<...>, <scalar_type>, !pto.tile_buf<...>)
+// compare form, with optional tmp
+pto.tgather ins(%src, %kValue[, %tmp] : !pto.tile_buf<...>, <scalar_type>[, !pto.tile_buf<...>])
            outs(%dst, %cdst : !pto.tile_buf<...>, !pto.tile_buf<...>)
            {cmpMode = #pto<cmp eq|gt>, offset = <i32>}
 
@@ -7687,13 +7690,18 @@ pto.tgather ins(%src, {maskPattern = #pto.mask_pattern<Pxxxx>} : !pto.tile_buf<.
 **Constraints & Verification:**
 
 - Exactly one of the following forms must be used:
-  - index form: `indices` (A5: `tmp` is optional; A2/A3: `tmp` is required)
-  - compare form: `kValue`, `tmp`, and `cdst`
+  - index form: `indices`, with optional `tmp`
+  - compare form: `kValue` and `cdst`, with optional `tmp`
   - mask form: `maskPattern`
+- **Temporary allocation**:
+  - On A2/A3, level1/level2 automatically allocate omitted `tmp` for index and compare forms. Explicit `tmp` operands are preserved.
+  - Level3 requires an explicit `tmp` for A2/A3 index forms and compare forms on every architecture.
+  - A5 index form needs no `tmp`; level1/level2 compare forms receive a placeholder tile when `tmp` is omitted. Mask form does not accept `tmp`.
+  - Automatic A2/A3 index scratch requires static physical and valid shapes for `indices`; compare scratch requires a static physical shape for `src`.
 - **Index gather: implementation checks (A2/A3)**:
   - `src` and `dst` element types must match and be one of `i16/i32/f16/f32`.
   - `indices` element type must be `i32`.
-  - `tmp` is required; `tmp` element type must match `indices`.
+  - When provided, `tmp` element type must match `indices`.
   - `dst`, `indices`, and `tmp` must use row-major layout.
   - `dst` and `indices` must have the same valid shape.
   - `indices` and `tmp` must have the same valid shape; their allocated row
@@ -7729,12 +7737,12 @@ pto.tgather ins(%src, {maskPattern = #pto.mask_pattern<Pxxxx>} : !pto.tile_buf<.
 **Basic Examples:**
 
 ```mlir
-// index + tmp
-pto.tgather ins(%src, %idx, %tmp : !pto.tile_buf<...>, !pto.tile_buf<...>, !pto.tile_buf<...>)
+// level2 index form: scratch is allocated automatically
+pto.tgather ins(%src, %idx : !pto.tile_buf<...>, !pto.tile_buf<...>)
            outs(%dst : !pto.tile_buf<...>)
 
-// compare + tmp
-pto.tgather ins(%src, %k, %tmp : !pto.tile_buf<...>, f16, !pto.tile_buf<...>)
+// level2 compare form: scratch is allocated automatically
+pto.tgather ins(%src, %k : !pto.tile_buf<...>, f16)
            outs(%dst, %cdst : !pto.tile_buf<...>, !pto.tile_buf<...>)
            {offset = 7 : i32}
 
@@ -7753,8 +7761,10 @@ pto.tgather ins(%src, {maskPattern = #pto.mask_pattern<P1111>} : !pto.tile_buf<.
 
 Each `offsets[i, k]` is a 32-byte-aligned byte address relative to the source
 UB base. It selects one complete 32-byte source block, which is copied to the
-corresponding output block. This is not a scalar per-element gather; use the
-index form of `pto.tgather` for arbitrary element indices.
+corresponding output block. Source and destination may have different shapes
+and element types: bytes are copied without numeric conversion. Each selected
+32-byte block must lie within the source buffer. This is not a scalar per-element
+gather; use the index form of `pto.tgather` for arbitrary element indices.
 
 **Arguments:**
 
@@ -7769,9 +7779,8 @@ index form of `pto.tgather` for arbitrary element indices.
 **Constraints & Verification:**
 
 - **Implementation checks (A2/A3)**
-  - `src` and `dst` must have the same valid shape.
   - `dst` and `offsets` must use row-major layout (`blayout=row_major`).
-  - `dst` element size must be `2` or `4` bytes.
+  - `dst` element size must be `1`, `2`, or `4` bytes.
   - `offsets` must use a 32-bit integer element type.
   - `offsets.v_row` must equal `dst.v_row`.
   - For destination element size `E`, each row needs
@@ -8447,14 +8456,14 @@ dst[i, j] = saturate(cast(src[i, j], rmode), satmode)
 | `src` | `pto.tile_buf` | Source tile |
 | `dst` | `pto.tile_buf` | Destination tile (different element type) |
 | `rmode` | `RoundModeAttr` (default: `CAST_RINT`) | Rounding mode |
-| `satmode` | `SaturationModeAttr` (default: `OFF`) | Saturation mode |
+| `satmode` | `SaturationModeAttr` (default: `ON`) | Saturation mode |
 
 **Results:** None. Writes into `dst` via DPS pattern.
 
 **Constraints & Verification:**
 
 - `dst` and `src` must be compatible in shape/valid region as required by the implementation.
-- `satmode = ON` requests destination-range clamping after rounding; `OFF` preserves the target's non-saturating conversion path.
+- Omitting `satmode` selects `ON`, which requests destination-range clamping after rounding. Specify `OFF` explicitly to use the target's non-saturating conversion path.
 - **A2/A3 and A5 notes:**
   - A2/A3 reject all low-precision `tcvt` operands.
   - A5 only accepts the following low-precision pairs: 
@@ -8516,7 +8525,12 @@ dst[i, j] = S + linear_index(i, j)   // or descending if requested
 
 **Hardware Mapping:**
 
-- Executes on the **Vector pipeline** (`PIPE_V`)
+- With a `tmp` operand, executes on the **Vector pipeline** (`PIPE_V`).
+- Without a `tmp` operand, executes on the **Scalar pipeline** (`PIPE_S`).
+- When A2/A3 level-2 compilation supplies an implicit `tmp`, automatic
+  synchronization uses `PIPE_V`. A following `pto.tstore` waits for the
+  sequence generation to complete on that pipeline. This applies to both
+  ascending and descending sequences.
 
 **Basic Example:**
 

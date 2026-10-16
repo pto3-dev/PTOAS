@@ -26,6 +26,8 @@ target_link_libraries(pto-test-opt PRIVATE
   MLIRFuncDialect
   MLIRArithDialect
   MLIRMemRefDialect
+  MLIRMathDialect
+  MLIRLLVMDialect
   MLIRSCFDialect
   MLIRControlFlowDialect
 )
@@ -71,3 +73,10 @@ target_link_libraries(pto-vfsimt-size-patcher-test PRIVATE
   LLVMSupport
   MLIRSupport
 )
+
+add_llvm_executable(pto-bisheng-scheduler-test
+  pto-bisheng-scheduler-test.cpp
+  PARTIAL_SOURCES_INTENDED
+)
+
+target_link_libraries(pto-bisheng-scheduler-test PRIVATE PTOASBishengScheduler)

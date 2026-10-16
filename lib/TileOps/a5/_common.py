@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,8 +6,10 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Shared constants/helpers for A5 TileLib template ports."""
 
+from ptodsl import pto
 import ptodsl.tilelib as tilelib
 
 
@@ -15,6 +18,10 @@ SIGNED_DTYPES = ("i8", "i16", "i32")
 UNSIGNED_DTYPES = ("ui8", "ui16", "ui32")
 INT_DTYPES = SIGNED_DTYPES + UNSIGNED_DTYPES
 NUMERIC_DTYPES = ("i8", "i16", "i32", "ui8", "ui16", "ui32", "f16", "bf16", "f32")
+ROW_REDUCTION_DTYPES = ("i16", "i32", "ui16", "ui32", "f16", "f32")
+# Row extremes (trowmax/trowmin) additionally accept 8-bit integers on A5:
+# the template widens them losslessly to 16 bits before the vector reduction.
+ROW_EXTREME_DTYPES = ROW_REDUCTION_DTYPES + ("i8", "si8", "ui8")
 
 
 def same_dtype_signatures(arity, dtypes=NUMERIC_DTYPES):
@@ -68,3 +75,24 @@ def element_store_dist(dtype):
     if bytewidth == 2:
         return "1PT_B16"
     return "1PT_B8"
+
+
+def scalar_literal(dtype, value):
+    name = dtype_name(dtype)
+    if name == "f32":
+        return pto.f32(float(value))
+    if name == "f16":
+        return pto.f16(float(value))
+    if name == "bf16":
+        return pto.bf16(float(value))
+    if name == "ui32":
+        return pto.ui32(value)
+    if name == "ui16":
+        return pto.ui16(value)
+    if name == "ui8":
+        return pto.ui8(value)
+    if name in {"i32", "si32"}:
+        return pto.i32(value)
+    if name in {"i16", "si16"}:
+        return pto.i16(value)
+    return pto.i8(value)

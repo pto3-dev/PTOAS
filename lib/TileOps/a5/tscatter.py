@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,23 +6,24 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """PTODSL TileLib templates for ``pto.tscatter``."""
 
 from dataclasses import dataclass
 
-from ptodsl import pto, scalar
+from ptodsl import pto
 from ptodsl._ast_rewrite import rewrite_jit_function
 import ptodsl.tilelib as tilelib
 
 from ._common import NUMERIC_DTYPES
-from ._row_arg import _scalar_literal
+from ._common import scalar_literal
 
 
 def _init_ub_buffer(dst: pto.Tile):
     dtype = dst.dtype
     tile_rows, tile_cols = dst.shape
     lanes = pto.elements_per_vreg(dtype)
-    zeros = pto.vbr(_scalar_literal(dtype, 0))
+    zeros = pto.vbr(scalar_literal(dtype, 0))
     mask, _ = pto.make_mask(dtype, lanes)
     for row in range(0, tile_rows, 1):
         for col in range(0, tile_cols, lanes):
@@ -203,7 +205,7 @@ def _tscatter_mask_row_emit(src: pto.Tile, dst: pto.Tile, interleave_args):
     lanes = pto.elements_per_vreg(dtype)
     times = 1 << len(interleave_args)
     dst_valid_col = valid_cols * times
-    zeros = pto.vbr(_scalar_literal(dtype, 0))
+    zeros = pto.vbr(scalar_literal(dtype, 0))
     ctx = _MaskRowStore(
         src,
         dst,

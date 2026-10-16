@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -42,7 +43,9 @@ def _dependencies(binary: Path) -> set[str]:
         capture_output=True,
         text=True,
     ).stdout
-    return set(re.findall(r"Shared library: \[([^]]+)\]", output))
+    # CANN wheels use explicit $ORIGIN-relative DT_NEEDED filenames. Ownership
+    # is determined by the library name, independently of that loading policy.
+    return {Path(name).name for name in re.findall(r"Shared library: \[([^]]+)\]", output)}
 
 
 def _native_extensions(package_root: Path) -> list[Path]:

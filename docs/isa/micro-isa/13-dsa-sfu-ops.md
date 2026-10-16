@@ -59,7 +59,7 @@ for (int i = 0; i < N; i++)
 
 ### `pto.vexpdif`
 
-- **syntax:** `%result = pto.vexpdif %input, %max, %mask, "EVEN|ODD" : !pto.vreg<NxT>, !pto.vreg<NxT>, !pto.mask<bW> -> !pto.vreg<Mxf32>`
+- **syntax:** `%result = pto.vexpdif %input, %max, %mask[, "EVEN|ODD"] : !pto.vreg<NxT>, !pto.vreg<NxT>, !pto.mask<bW> -> !pto.vreg<Mxf32>`
 - **A5 types:** input `f16` or `f32`, output `f32`
 - **semantics:** Fused exp(x - max) for numerically stable softmax.
 
@@ -72,7 +72,11 @@ for (int i = 0; i < N; i++)
 
 - **inputs:** `%input` is the source vector, `%max` is the broadcasted
   subtraction term, `%mask` selects active source lanes, and `%part` selects
-  `EVEN` or `ODD` for the underlying hardware contract.
+  `EVEN` or `ODD` for the underlying hardware contract. An `f16` source packs
+  two elements per 32-bit lane and one instruction only consumes the selected
+  half, so `%part` is required; an `f32` source is covered by a single
+  instruction that computes the whole vector and the selected value is not
+  observable in the result, so `%part` may be omitted.
 - **outputs:** `%result` is the fused `exp(input - max)` vector with `f32`
   elements.
 - **constraints and limitations:** Source vectors must be `f16` or `f32`, the
@@ -184,6 +188,8 @@ for (int i = 0; i < N; i++)
 - **outputs:** `%result` is the multiply-accumulate result.
 - **constraints and limitations:** `pto.vmula` is a fused multiply-accumulate
   operation and is not always interchangeable with separate `vmul` plus `vadd`.
+  A5 supports `i16`, `u16`, `i32`, `u32`, `f16`, `bf16`, and `f32` operands;
+  `i8` and `u8` operands are not supported.
 
 ---
 
@@ -192,11 +198,13 @@ for (int i = 0; i < N; i++)
 ### `pto.vci`
 
 - **syntax:** `%result = pto.vci %index {order = "ASC|DESC"} : T -> !pto.vreg<NxT>`
-- **semantics:** Generate a lane index vector from a scalar base value.
+- **semantics:** Generate a lane index vector from a scalar base value.  The
+  scalar names the ramp's *upper* end in `DESC`, so the descending form is the
+  hardware ramp `(base_index + N - 1) - i`, not `base_index - i`.
 
 ```c
 for (int i = 0; i < N; i++)
-    dst[i] = (order == ASC) ? (base_index + i) : (base_index - i);
+    dst[i] = (order == ASC) ? (base_index + i) : (base_index + N - 1 - i);
 ```
 
 **Use case:** Generate indices for gather/scatter, argsort, etc.
@@ -209,7 +217,18 @@ for (int i = 0; i < N; i++)
   `!pto.vreg<256xsi8>`, `!pto.vreg<128xsi16>`, `!pto.vreg<64xsi32>`,
   `!pto.vreg<128xf16>`, and `!pto.vreg<64xf32>`. `%index` must use the
   matching scalar type for `f16`/`f32`; for integer results, `%index` must use
-  the same bit width and may be signless or signed.
+  the same bit width and may be signless or signed.  These are the hardware VCI
+  element types; there is no `bf16` form, and the VMI index-generation ops and
+  this verifier both reject it, because the instruction reads the base as a byte
+  index and would therefore ramp the base's byte position instead of the lane
+  index.
+- **difference from `pto.vmi.vci`:** the ramp above is the measured hardware
+  behavior — on the A5 camodel, `f16` with `N = 128` and `base_index = 7` in
+  `DESC` produces `134..7`.  The VMI-level `pto.vmi.vci` op keeps the different
+  contract `dst[i] = base ∓ i` instead, and materializes its `DESC` form as
+  `pto.vci 0 {ASC}` plus a negation and one `vadds` per chunk (see
+  `docs/isa/vmi-isa/02-index-gen.md`).  A caller moving an expression from the
+  VMI level must therefore not reuse `base_index - i` here.
 
 ---
 

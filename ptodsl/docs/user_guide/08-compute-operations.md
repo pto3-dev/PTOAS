@@ -43,7 +43,8 @@ pto.tile.mul(scale_tile, data_tile, scaled_tile)
 
 #### `pto.tile.div(src0: Tile, src1: Tile, dst: Tile, *, precision: Precision = Precision.Default) -> None`
 
-**Description**: Element-wise division. `precision` can be `Default` or `HighPrecision` (f16/f32 only).
+**Description**: Element-wise division. `precision` can be `Default` or
+`HighPrecision` (f16/f32 only).
 
 `div_precision` remains accepted temporarily for compatibility and emits a
 `PTODSLDeprecationWarning`; use `precision` for new code. The same migration
@@ -89,7 +90,8 @@ Element-wise operations between a tile and a scalar.
 
 #### `pto.tile.divs(src: Tile, scalar: ScalarType, dst: Tile, *, precision: Precision = Precision.Default) -> None`
 
-**Description**: Element-wise tile-scalar division: `dst[i,j] = src[i,j] / scalar`.
+**Description**: Element-wise tile-scalar division:
+`dst[i,j] = src[i,j] / scalar`.
 
 ---
 
@@ -1780,11 +1782,18 @@ exp_vec = pto.vexp(s_row, col_mask)
 #### `pto.vadd(v0: VRegType, v1: VRegType, mask: MaskType) -> VRegType`
 #### `pto.vsub(v0: VRegType, v1: VRegType, mask: MaskType) -> VRegType`
 #### `pto.vmul(v0: VRegType, v1: VRegType, mask: MaskType) -> VRegType`
-#### `pto.vdiv(v0: VRegType, v1: VRegType, mask: MaskType) -> VRegType`
+#### `pto.vdiv(v0: VRegType, v1: VRegType, mask: MaskType, *, precision=None) -> VRegType`
 #### `pto.vmax(v0: VRegType, v1: VRegType, mask: MaskType) -> VRegType`
 #### `pto.vmin(v0: VRegType, v1: VRegType, mask: MaskType) -> VRegType`
 
 **Description**: Element-wise binary operation: `result[i] = v0[i] <op> v1[i]` for lanes where `mask[i]` is true.
+
+For `pto.vdiv`, pass
+`precision=pto.DivPrecision.HighPrecision` only when the additional
+precision is required. High-precision vector division is supported only on A5
+and is expanded through SoftLib. This expansion can substantially increase the
+generated instruction count and execution latency. The default mode retains
+the ordinary vector division path.
 
 **Parameters**:
 
@@ -1799,6 +1808,48 @@ exp_vec = pto.vexp(s_row, col_mask)
 | Return Value | Type | Description |
 |--------------|------|-------------|
 | `result` | `VRegType` | Result vector |
+
+
+---
+
+### 8.2.3 Carry vector ops
+
+#### `pto.vaddc(v0: VRegType, v1: VRegType, mask: MaskType) -> (VRegType, MaskType)`
+#### `pto.vsubc(v0: VRegType, v1: VRegType, mask: MaskType) -> (VRegType, MaskType)`
+#### `pto.vaddcs(v0: VRegType, v1: VRegType, carry_in: MaskType, mask: MaskType) -> (VRegType, MaskType)`
+#### `pto.vsubcs(v0: VRegType, v1: VRegType, carry_in: MaskType, mask: MaskType) -> (VRegType, MaskType)`
+
+**Description**: Carry-family operations compute lane-wise integer arithmetic and return both the arithmetic result and a per-lane carry predicate. `vsubc` and `vsubcs` use the carry predicate as **not-borrow**: `carry[i] = 1` means the subtraction completed without borrow, and `carry[i] = 0` means a borrow occurred. The comparison in this definition is unsigned, even for `si32` vectors.
+
+For `pto.vsubc`, each active lane `i` obeys:
+
+```text
+difference[i] = (v0[i] - v1[i]) modulo 2^32
+carry[i] = (uint32(v0[i]) >= uint32(v1[i]))
+```
+
+The subtraction result is reduced modulo `2^32`. Carry-family operations
+support only `i32`, `si32`, and `ui32` vector elements. The two input vectors
+must have the same type. Both `mask` and the returned `carry` must use `b32`
+granularity, for example `pto.pset_b32(...)`. Inactive lanes have unspecified
+result values.
+
+```python
+mask32 = pto.make_mask(pto.ui32, pto.MaskPattern.ALL)
+difference, carry = pto.vsubc(lhs_u32, rhs_u32, mask32)
+```
+
+For `pto.vsubcs`, each active lane `i` obeys:
+
+```text
+difference[i] = (v0[i] - v1[i] - (1 - carry_in[i])) modulo 2^32
+carry_out[i] = (uint32(v0[i]) >= uint32(v1[i]) + (1 - carry_in[i]))
+```
+
+Here `carry_in[i] = 1` means no incoming borrow and `carry_in[i] = 0` means
+an incoming borrow. The returned `carry_out[i]` uses the same not-borrow
+polarity: `1` means no borrow and `0` means borrow. The comparison is unsigned,
+even for `si32` vectors.
 
 ---
 
@@ -1820,7 +1871,7 @@ not defined by the current contract.
 
 ---
 
-### 8.2.3 Vector-scalar ops
+### 8.2.4 Vector-scalar ops
 
 #### `pto.vadds(vec: VRegType, scalar: ScalarType, mask: MaskType) -> VRegType`
 #### `pto.vsubs(vec: VRegType, scalar: ScalarType, mask: MaskType) -> VRegType`
@@ -1872,7 +1923,7 @@ as `vbr(scalar)` followed by `vand(...)`, `vor(...)`, or `vxor(...)`.
 
 ---
 
-### 8.2.3.1 Vector duplication: `pto.vdup`
+### 8.2.4.1 Vector duplication: `pto.vdup`
 
 #### `pto.vdup(input: ScalarType, mask: MaskType) -> VRegType`
 #### `pto.vdup(input: VRegType, mask: MaskType, position: PositionMode = PositionMode.LOWEST) -> VRegType`
@@ -1931,13 +1982,34 @@ dup_highest = pto.vdup(vec, mask32, pto.PositionMode.HIGHEST)
 
 ---
 
-### 8.2.4 Full-vector and group reductions
+### 8.2.5 Full-vector and group reductions
 
 #### Full-vector reductions
+
+All three row reduction entry points accept only 16/32-bit integers
+(signless, signed, or unsigned), `f16`, and `f32`. Eight-bit integers, BF16,
+FP8, and HiF8 are rejected before IR emission; convert them explicitly first.
+`pto.vcadd` widens 16-bit integer results to 32 bits with matching signedness
+and half as many lanes. Other supported input types retain their result type.
+
+The A5 VPTO TileLib implementations of `trowmax`, `trowmin`, `trowargmax`,
+and `trowargmin` use these row operations and follow the vector source-type
+restriction, with one addition: on A5, the `trowmax` and `trowmin` tile
+entries also accept `i8`/`si8`/`ui8` sources. Their template widens 8-bit
+rows losslessly to 16 bits for the vector reduction, so no explicit
+conversion is needed for row min/max. `trowsum`, `trowprod`, and the arg
+reductions still reject 8-bit sources; the template selector rejects all
+unsupported source types.
 
 #### `pto.vcadd(vec: VRegType, mask: MaskType) -> VRegType`
 
 **Description**: Full-vector sum reduction. Result placed in lane 0.
+
+**Types**: 16/32-bit integers (signed, unsigned, or signless), `f16`, and `f32`.
+Eight-bit integer inputs are rejected; explicitly convert to a supported type
+before reducing. A 16-bit integer input returns 32-bit integer elements with the
+same signedness and half as many lanes. Other supported inputs preserve their
+vector type.
 
 #### `pto.vcmax(vec: VRegType, mask: MaskType) -> VRegType`
 
@@ -1988,13 +2060,35 @@ group_sum = pto.vcgadd(p_row, col_mask)
 
 ---
 
-### 8.2.5 Fused and compound ops
+#### `pto.dhistv2(acc: VRegType, source: VRegType, mask: MaskType, bin_val: ScalarType) -> VRegType`
+
+**Description**: Update a distribution histogram from active 8-bit source
+lanes. `acc` supplies the incoming 128 16-bit bin accumulators, and the result
+contains the updated accumulators.
+
+**Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `acc` | `VRegType` | 128-lane, 16-bit integer accumulator vector |
+| `source` | `VRegType` | 256-lane, 8-bit integer sample vector |
+| `mask` | `MaskType` | `b8` predicate selecting active source lanes |
+| `bin_val` | `ScalarType` | `i32` histogram bin/control operand |
+
+**Returns**: A vector with exactly the same type as `acc`.
+
+The frontend forwards these operands to the VPTO operation; PTOAS verification
+rejects an incompatible accumulator, source, mask granularity, or bin type.
+
+---
+
+### 8.2.6 Fused and compound ops
 
 These combine an arithmetic operation with a math function or activation in a single instruction.
 
-#### `pto.vexpdif(vec: VRegType, max_vec: VRegType, mask: MaskType, *, part: PartMode = PartMode.ODD) -> VRegType`
+#### `pto.vexpdif(vec: VRegType, max_vec: VRegType, mask: MaskType, *, part: PartMode | None = None) -> VRegType`
 
-**Description**: `exp(vec[i] - max_vec[i])` — the stable softmax numerator. `part` controls which half of the vector is computed: `EVEN` or `ODD`. The result keeps the same `VRegType` as the input vector.
+**Description**: `exp(vec[i] - max_vec[i])` — the stable softmax numerator. `part` selects which 16-bit half of every 32-bit lane feeds the mixed precision subtraction: `EVEN` or `ODD`. `f16` inputs pack two elements per 32-bit lane and consume only one half per instruction, so they must pass `part` explicitly; `f32` inputs are covered by a single instruction that computes the whole vector, so `part` may be omitted. The result keeps the same `VRegType` as the input vector.
 
 ---
 
@@ -2067,7 +2161,7 @@ exp_f16_odd  = pto.vmulscvt(exp_f32_odd, 1.0, mask, rnd=pto.VcvtRoundMode.A, par
 
 ---
 
-### 8.2.6 Comparison and selection
+### 8.2.7 Comparison and selection
 
 #### `pto.vcmp(v0: VRegType, v1: VRegType, seed_mask: MaskType, cmp_mode: CmpMode) -> MaskType`
 
@@ -2116,7 +2210,7 @@ exp_f16_odd  = pto.vmulscvt(exp_f32_odd, 1.0, mask, rnd=pto.VcvtRoundMode.A, par
 
 ---
 
-### 8.2.7 Vector type conversion and packing
+### 8.2.8 Vector type conversion and packing
 
 These ops change the element type or layout of vector registers. They are distinct from the tile-level `tile.cvt` — they operate on `VRegType` values inside `@pto.tileop` and are the explicit micro-op counterparts to higher-level conversion helpers.
 
@@ -2147,6 +2241,7 @@ These ops change the element type or layout of vector registers. They are distin
 - `f32 -> hif8` requires `rnd=A/H`, `sat`, and `part=P0/P1/P2/P3`.
 - `f16/bf16 -> f8e4m3/f8e5m2` requires `rnd=R/A/F/Z/C`, `sat`, and `part=EVEN/ODD`.
 - `f16 -> hif8` requires `rnd=A/H`, `sat`, and `part=EVEN/ODD`.
+- `f16 -> bf16` requires `rnd=R/A/F/Z/C`; it does not take `sat` or `part`.
 - `bf16 -> f4e1m2x2/f4e2m1x2` requires `rnd=R/A/F/Z/C` and `part=P0/P1/P2/P3`; it does not take `sat`.
 - `f8e4m3/f8e5m2/hif8 -> f32` and `f4e1m2x2/f4e2m1x2 -> bf16` require `part=P0/P1/P2/P3`; they do not take `rnd` or `sat`.
 
@@ -2216,7 +2311,37 @@ packed_high = pto.vpack(vec_i32, pto.VPackPart.HIGHER)  # upper 64 lanes -> 128�
 
 ---
 
-### 8.2.7.1 Index generation
+#### `pto.vunpack(src: VRegType, part: IndexLike) -> VRegType`
+
+**Description**: Widen the selected half of an integer vector. `part=0`
+selects the lower half and `part=1` selects the higher half. The result has
+half as many lanes, twice the element width, and the same total payload size.
+
+**Signedness rule**:
+
+- Signed input uses `pto.vsunpack`, sign-extends, and produces a signed result.
+- Unsigned input uses `pto.vzunpack`, zero-extends, and produces an unsigned result.
+- Signless input follows `pto.vpack`'s convention: it uses `pto.vzunpack` and
+  produces an explicitly unsigned result.
+
+For example, `si8` produces `si16`, while both `ui8` and signless `i8`
+produce `ui16`. Likewise, `si16` produces `si32`, while `ui16` and signless
+`i16` produce `ui32`.
+
+**Constraints**:
+
+- Only 8-bit to 16-bit and 16-bit to 32-bit widening are supported.
+- The source lane count must be even.
+- A statically known `part` must be `0` or `1`; a dynamic index must evaluate
+  to one of those values at runtime.
+
+For example, unpacking the lower half of `!pto.vreg<256xsi8>` with `part=0`
+produces `!pto.vreg<128xsi16>`. Unpacking the higher half of signless
+`!pto.vreg<256xi8>` with `part=1` produces `!pto.vreg<128xui16>`.
+
+---
+
+### 8.2.8.1 Index generation
 
 #### `pto.vci(base: ScalarType | int, order: OrderMode | None = None) -> VRegType`
 
@@ -2234,7 +2359,7 @@ typed_idx = pto.vci(pto.i32(16), order=pto.OrderMode.ASC)
 
 ---
 
-### 8.2.8 Vector rearrangement
+### 8.2.9 Vector rearrangement
 
 These ops rearrange data between vector registers without touching UB memory.
 They are useful for switching between interleaved layouts (`x0, y0, x1, y1,
@@ -2293,6 +2418,26 @@ align0 = pto.init_align()
 align1 = pto.vstur(align0, compacted, store_base, pto.PostUpdate.ON)
 pto.vstar(align1, store_base)
 ```
+
+---
+
+#### `pto.vusqz(vec: VRegType, mask: MaskType) -> VRegType`
+
+**Description**: Generate exclusive prefix counts from `mask`. Result lane
+`i` contains the number of active predicate lanes before lane `i`; therefore
+lane 0 is always zero. `vec` is retained by the VPTO interface for operand
+compatibility, while the observable count values are determined by `mask`.
+
+**Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `vec` | `VRegType` | Signed or signless 8-, 16-, or 32-bit integer carrier |
+| `mask` | `MaskType` | Predicate from which prefix counts are generated |
+
+**Returns**: A prefix-count vector with exactly the same type as `vec`.
+Unsigned carrier element types and widths other than 8, 16, or 32 bits are
+rejected by PTOAS verification.
 
 ---
 
@@ -2371,22 +2516,23 @@ even_lanes, odd_lanes = pto.vdintlv(packed_low, packed_high)
 
 ---
 
-### 8.2.9 Vector compute quick reference
+### 8.2.10 Vector compute quick reference
 
 | Category | Operations |
 |----------|------------|
 | Unary | `vexp`, `vln`, `vsqrt`, `vabs`, `vneg`, `vrec`, `vrsqrt`, `vrelu`, `vnot` |
 | Binary | `vadd`, `vsub`, `vmul`, `vdiv`, `vmax`, `vmin`, `vand`, `vor`, `vxor`, `vshl`, `vshr` |
+| Carry | `vaddc`, `vsubc`, `vaddcs`, `vsubcs` |
 | Vector-scalar | `vadds`, `vsubs`, `vmuls`, `vmaxs`, `vmins`, `vlrelu`, `vands`, `vors`, `vxors`, `vshls`, `vshrs` |
 | Broadcast | `vbr`, `vdup` |
-| Full reduction | `vcadd`, `vcmax`, `vcmin` |
+| Full reduction | `vcadd`, `vcmax`, `vcmin`, `dhistv2` |
 | Group reduction | `vcgadd`, `vcgmax`, `vcgmin` |
 | Scan | `vcpadd` |
 | Fused | `vexpdif`, `vaxpy`, `vmula`, `vmadd`, `vaddrelu`, `vsubrelu`, `vmulscvt` |
 | Compare/select | `vcmp`, `vcmps`, `vsel` |
-| Conversion | `vcvt`, `vpack`, `vbitcast`, `pbitcast` |
+| Conversion | `vcvt`, `vpack`, `vunpack`, `vbitcast`, `pbitcast` |
 | Index generation | `vci` |
-| Rearrangement | `vsqz`, `vintlv`, `vdintlv` |
+| Rearrangement | `vsqz`, `vusqz`, `vintlv`, `vdintlv` |
 
 ---
 
@@ -2488,6 +2634,47 @@ pto.mad(
 )
 ```
 
+### 8.3.2a Runtime mad flags (new)
+
+`pto.mad`, `pto.mad_acc`, and `pto.mad_bias` additionally accept the four
+control flags as **runtime values** (any `scalar.*` expression producing an
+i32/i1), in addition to the static keywords above:
+
+| Keyword | Runtime type | Meaning |
+|---------|--------------|---------|
+| `unit_flag` | i32 in `{0, 2, 3}` | Runtime unit-flag control; replaces the static `unit_flag(...)` clause |
+| `disable_gemv` | i1 | Runtime GEMV-disable; replaces the static keyword |
+| `init` | i1 | Runtime acc-init selector: 1 = zero-Cmatrix rewrite, 0 = accumulate into `dst` |
+| `bias_init` | i1 | Runtime BTbuf selector on `mad_bias`: 1 = C source is the bias buffer, 0 = C source is `dst` |
+
+A runtime value is packed into the mad `xt` immediate at expansion time and
+**takes precedence over the static semantics encoded by the op kind** — this
+is the documented contract, and it is what lets a template emit a single op
+for a data-dependent choice instead of forking with `pto.if_`:
+
+```python
+# first sub-K block: clear or accumulate depending on a runtime flag
+pto.mad_acc(
+    a_l0.as_ptr(), b_l0.as_ptr(), acc.as_ptr(), m, n, k,
+    init=clear_accum,                       # runtime i1
+    unit_flag=scalar.select(uf == 3, pto.const(2, dtype=pto.si32), uf),
+)
+```
+
+Rules:
+
+- Passing a runtime `unit_flag`/`disable_gemv` together with the same-named
+  static clause/keyword is rejected (mutually exclusive).
+- Passing a **static** (Python int/bool) `init`/`bias_init` is rejected;
+  the accumulate/bias-init choice is the op kind's job (`mad` vs `mad_acc`,
+  `mad_bias`), and only runtime values may override it per instruction.
+- The mx family (`mad_mx*`) does **not** accept runtime flags yet; passing
+  one raises a `TypeError`. The IR layer already carries the operands and
+  interfaces, so lifting this restriction later is additive.
+- Capability probing: `ptodsl.MAD_RUNTIME_FLAGS` is the package-level
+  switch declaring this support (see the tilelang PTO GEMM template for a
+  downstream consumer).
+
 ### 8.3.3 Typical cube matmul pattern
 
 A full cube matmul follows a three-stage pattern: stage operands into L0A/L0B, compute, write back to UB.
@@ -2530,8 +2717,8 @@ arithmetic in SIMT scalar code after contiguous scalar loads or explicit
 
 <!-- ptodsl-doc-pending: {"reason":"illustrative fragment; covered by test_jit_compile scalar contiguous vector probes"} -->
 ```python
-x4 = scalar.load(ptr, offset, contiguous=4)
+x4 = pto.load(ptr, offset, contiguous=4)
 rstd4 = pto.Vec(pto.f32, 4, init=rstd)
 y4 = x4 * rstd4
-scalar.store(y4, ptr, offset)
+pto.store(y4, ptr, offset)
 ```

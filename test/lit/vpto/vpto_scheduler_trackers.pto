@@ -25,6 +25,7 @@
 // CHECK-NEXT: strategy urgent critical path: pass
 // CHECK-NEXT: strategy closure-cone progress: pass
 // CHECK-NEXT: strategy deterministic tie-break: pass
+// CHECK-NEXT: scheduler register-class frontiers: pass
 // CHECK-NEXT: model predicate-limit: 7
 // CHECK-NEXT: boundary independent-latency: pass
 // CHECK-NEXT: boundary fanout-budget-cycle-bucket: pass
@@ -37,3 +38,4 @@
 // CHECK-NEXT: scheduler over-limit pressure relief: pass
 // CHECK-NEXT: scheduler unbounded-pressure-delta: pass
 // CHECK-NEXT: scheduler random-dag differential: pass seeds=8 dags=8
+// CHECK-NEXT: rematerialization second-schedule failure rollback: pass

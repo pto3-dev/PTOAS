@@ -685,17 +685,15 @@ getEffectiveVPTOSchedulerMode(llvm::StringRef arch) {
   return vptoSchedulerMode;
 }
 
-static void prepareVPTOForEmission(PassManager &pm,
-                                   VPTOSchedulerCLIMode schedulerMode) {
-  auto &kernelModulePM = pm.nest<ModuleOp>();
-  // VPTO LLVM emission lowers pto.barrier to the backend barrier intrinsic.
-  // A5 does not support a standalone PIPE_V barrier; vector barriers are either
-  // unnecessary or must be removed before LLVM emission. Upper-level
-  // programming frameworks may still produce pto.barrier(PIPE_V) from generic
-  // storage-sync constructs, so run sync-to-pipe legalization here and let the
-  // backend checks catch any illegal barrier that still leaks through.
-  kernelModulePM.addNestedPass<func::FuncOp>(
-      pto::createLoweringSyncToPipePass());
+static bool getEffectiveVPTOSchedulerRematerialization(
+    llvm::StringRef arch, VPTOSchedulerCLIMode schedulerMode) {
+  if (vptoSchedulerRemat.getNumOccurrences() == 0) {
+    return arch == "a5" && schedulerMode == VPTOSchedulerCLIMode::On;
+  }
+  return vptoSchedulerRemat;
+}
+
+static void addPersistentFragmentLowering(OpPassManager &kernelModulePM) {
   // Persistent fragment loops must be fully unrolled before fragment
   // analysis/materialization; promote them ahead of the unroll pass.
   kernelModulePM.addNestedPass<func::FuncOp>(
@@ -710,6 +708,21 @@ static void prepareVPTOForEmission(PassManager &pm,
   kernelModulePM.addNestedPass<func::FuncOp>(
       pto::createPTOMaterializeSIMTPersistentFragmentPass());
   kernelModulePM.addPass(pto::createPTOOutlineSIMTSectionsPass());
+}
+
+static void prepareVPTOForEmission(PassManager &pm,
+                                   VPTOSchedulerCLIMode schedulerMode,
+                                   bool rematerialize) {
+  auto &kernelModulePM = pm.nest<ModuleOp>();
+  // VPTO LLVM emission lowers pto.barrier to the backend barrier intrinsic.
+  // A5 does not support a standalone PIPE_V barrier; vector barriers are either
+  // unnecessary or must be removed before LLVM emission. Upper-level
+  // programming frameworks may still produce pto.barrier(PIPE_V) from generic
+  // storage-sync constructs, so run sync-to-pipe legalization here and let the
+  // backend checks catch any illegal barrier that still leaks through.
+  kernelModulePM.addNestedPass<func::FuncOp>(
+      pto::createLoweringSyncToPipePass());
+  addPersistentFragmentLowering(kernelModulePM);
   kernelModulePM.addPass(pto::createVPTOPtrNormalizePass());
   kernelModulePM.addPass(pto::createVPTOPtrCastCleanupPass());
   kernelModulePM.addPass(pto::createVPTOOptimizeVcvtPass());
@@ -738,15 +751,29 @@ static void prepareVPTOForEmission(PassManager &pm,
   kernelModulePM.addPass(pto::createPTOInlineLibCallPass());
   kernelModulePM.addPass(createCanonicalizerPass());
   kernelModulePM.addPass(createCSEPass());
+  // Tile and soft-library expansion may introduce generic scalar PTO ops.
+  // Lower them before final VPTO scheduling and legality validation.
+  kernelModulePM.addNestedPass<func::FuncOp>(
+      pto::createPTOLowerGenericOpsPass());
+  auto &expandedChildModulePM = kernelModulePM.nest<ModuleOp>();
+  expandedChildModulePM.addNestedPass<func::FuncOp>(
+      pto::createPTOLowerGenericOpsPass());
   // Reconstruct the optimized reduction tree before scheduling so the
   // scheduler sees the final MI instruction set and dependencies.
   kernelModulePM.addPass(pto::createVPTOCombineReductionsPass());
   kernelModulePM.addPass(createCSEPass());
+  // Materialize the minimal CTRL accesses before scheduling: a surviving
+  // ctrl_state_guard is region-bearing and would make every guarded raw MAD
+  // a scheduling boundary, splitting cube loop bodies and blocking the
+  // MTE/MAD interleave the scheduler exists to find.
+  kernelModulePM.addNestedPass<func::FuncOp>(
+      pto::createVPTOOptimizeCtrlStatePass());
   if (schedulerMode != VPTOSchedulerCLIMode::Off) {
     pto::VPTOSchedulerOptions schedulerOptions;
     schedulerOptions.mode =
         schedulerMode == VPTOSchedulerCLIMode::Analyze ? "analyze" : "on";
     schedulerOptions.trace = vptoSchedulerTrace;
+    schedulerOptions.rematerialize = rematerialize;
     kernelModulePM.addPass(pto::createVPTOSchedulerPass(schedulerOptions));
   }
   kernelModulePM.addPass(pto::createPTOValidateVPTOEmissionIRPass());
@@ -806,6 +833,8 @@ static void lowerPTOToVPTOBackend(PassManager &pm, ModuleOp module) {
   kernelModulePM.addPass(pto::createPTOInlineLibCallPass());
   kernelModulePM.addNestedPass<mlir::func::FuncOp>(
       pto::createFoldTileBufIntrinsicsPass("shape-only"));
+  kernelModulePM.addNestedPass<mlir::func::FuncOp>(
+      pto::createPTOLowerGenericOpsPass());
   if (enableA5VPTOPostLoweringFusionLifecycle) {
     appendA5VPTOPostLoweringFusionPipeline(kernelModulePM);
   }
@@ -886,6 +915,12 @@ static LogicalResult runVPTOBackendPipeline(OwningOpRef<ModuleOp> &module,
   if (!hasTileOpsToExpand) {
     pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCanonicalizeIRPass());
   }
+  // Range-driven arith rewrites before the module is split into vector/cube
+  // units: hardware SIMT ID queries are still present here, so their
+  // non-negative InferIntRangeInterface ranges let the upstream arith passes
+  // prove signed-vs-unsigned equivalence (e.g. floordivsi/remsi by pow2 on
+  // get_tid_x results).
+  pm.addPass(pto::createPTOArithRangeOptimizePass());
   pm.addPass(pto::createVPTOSplitCVModulePass());
   pm.addPass(pto::createVPTONormalizeContainerPass());
   if (hasTileOpsToExpand) {
@@ -900,9 +935,11 @@ static LogicalResult runVPTOBackendPipeline(OwningOpRef<ModuleOp> &module,
   kernelModulePM.addPass(std::make_unique<ApplySIMTEntryNoInlinePass>());
   kernelModulePM.addPass(createInlinerPass());
   appendVMISemanticPipeline(kernelModulePM);
-  VPTOSchedulerCLIMode schedulerMode = getEffectiveVPTOSchedulerMode(
-      resolveEffectiveTargetArch(*module, ptoTargetArch));
-  prepareVPTOForEmission(pm, schedulerMode);
+  std::string arch = resolveEffectiveTargetArch(*module, ptoTargetArch);
+  VPTOSchedulerCLIMode schedulerMode = getEffectiveVPTOSchedulerMode(arch);
+  bool rematerialize =
+      getEffectiveVPTOSchedulerRematerialization(arch, schedulerMode);
+  prepareVPTOForEmission(pm, schedulerMode, rematerialize);
   if (failed(applyConfiguredPassManagerCLOptions(
           pm, "VPTO unified emission pipeline")))
     return failure();
@@ -947,7 +984,16 @@ static void appendVMISemanticPipeline(OpPassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(pto::createVMILegalizeArithSelectPass());
   pm.addPass(pto::createPTOValidateVMILayoutIRPass());
-  pm.addPass(pto::createVMIToVPTOPass());
+  // The layout solver selects E2B as a lowering preference, so a
+  // group_broadcast_load may still carry a contiguous result layout at this
+  // point. Make the preference explicit before vmi-to-vpto: retype the load
+  // result to the direct E2B d2/d4 layout and insert an ensure_layout
+  // d2/d4 -> contiguous right after it. Without this, vmi-to-vpto cannot
+  // lower the multi-part contiguous E2B form as a single packet per part.
+  pm.addPass(pto::createVMIExpandImplicitEnsureLayoutsPass());
+  pto::VMIToVPTOOptions vmiToVPTOOptions;
+  vmiToVPTOOptions.enableVmiFastmath = enableVmiFastmath;
+  pm.addPass(pto::createVMIToVPTOPass(vmiToVPTOOptions));
   pm.addPass(pto::createVPTOStatefulStreamFusionPass());
 }
 
@@ -983,7 +1029,7 @@ static LogicalResult validateCompileBackendFlags(PTOBackend backend,
   VPTOSchedulerCLIMode schedulerMode = getEffectiveVPTOSchedulerMode(arch);
   if (backend != PTOBackend::VPTO &&
       (emitVPTO || emitVPTOLLVMDialect || ptoPrintSeamIR ||
-       !ptoSeamIRFile.empty())) {
+       !ptoSeamIRFile.empty() || vptoSchedulerRemat)) {
     llvm::errs() << "Error: VPTO-specific flags require "
                     "--pto-backend=vpto or pto.backend = \"vpto\".\n";
     return failure();
@@ -998,6 +1044,11 @@ static LogicalResult validateCompileBackendFlags(PTOBackend backend,
   }
   if (vptoSchedulerTrace && schedulerMode != VPTOSchedulerCLIMode::On) {
     llvm::errs() << "Error: --vpto-scheduler-trace requires "
+                    "--vpto-scheduler=on.\n";
+    return failure();
+  }
+  if (vptoSchedulerRemat && schedulerMode != VPTOSchedulerCLIMode::On) {
+    llvm::errs() << "Error: --vpto-scheduler-remat requires "
                     "--vpto-scheduler=on.\n";
     return failure();
   }
@@ -1137,18 +1188,21 @@ static LogicalResult validateTAssignConfiguration(ModuleOp module,
                     "disabled.\n";
     return failure();
   }
-  const int enabledAutoSyncModes =
-      (enableInsertSync ? 1 : 0) + (enableBufidSync ? 1 : 0) +
-      (enableInjectBarrierAllSync ? 1 : 0);
+  const int enabledAutoSyncModes = (enableInsertSync ? 1 : 0) + (enableUnifiedSync ? 1 : 0) +
+                                   (enableBufidSync ? 1 : 0) + (enableInjectBarrierAllSync ? 1 : 0);
   if (enabledAutoSyncModes > 1) {
     llvm::errs() << "Error: --enable-insert-sync, --enable-bufid_sync, "
-                    "and --enable-inject-barrier-all-sync are mutually "
+                    "--enable-unified-sync, and --enable-inject-barrier-all-sync are mutually "
                     "exclusive.\n";
     return failure();
   }
   if (hasTAssign && enableInjectBarrierAllSync) {
     llvm::errs() << "Error: pto.tassign requires "
                     "--enable-inject-barrier-all-sync to be disabled.\n";
+    return failure();
+  }
+  if (hasTAssign && enableUnifiedSync) {
+    llvm::errs() << "Error: pto.tassign requires --enable-unified-sync to be disabled.\n";
     return failure();
   }
   if (hasTAssign && enableBufidSync) {
@@ -1223,6 +1277,13 @@ static LogicalResult runPreBackendNormalization(ModuleOp module) {
   preBackendPM.addPass(pto::createPTOMaterializeTileOpSectionsPass());
   preBackendPM.addPass(pto::createPTONormalizeUncoveredTileSectionsPass());
   preBackendPM.addPass(pto::createPTOValidatePhysicalSectionBoundariesPass());
+  // Shared frontend analyses consume standard arith/index producer chains.
+  // Lower execution-domain-independent PTO scalar ops before those analyses.
+  preBackendPM.addNestedPass<func::FuncOp>(
+      pto::createPTOLowerGenericOpsPass());
+  auto &preBackendChildModulePM = preBackendPM.nest<ModuleOp>();
+  preBackendChildModulePM.addNestedPass<func::FuncOp>(
+      pto::createPTOLowerGenericOpsPass());
   if (failed(preBackendPM.run(module))) {
     llvm::errs() << "Error: failed to normalize uncovered PTO tile sections.\n";
     return failure();
@@ -1276,28 +1337,22 @@ static LogicalResult appendFusionFrontendPasses(
 }
 
 static LogicalResult appendPlanMemoryPasses(PassManager &pm,
-                                            PTOBuildLevel effectiveLevel) {
-  if (planMemoryImpl != "legacy" && planMemoryImpl != "modern") {
-    llvm::errs() << "Error: invalid --plan-memory-impl='" << planMemoryImpl
-                 << "', expected 'legacy' or 'modern'.\n";
-    return failure();
+                                            PTOBuildLevel effectiveLevel,
+                                            bool enablePlanMemory) {
+  // At level3 every address is supplied by the user, so this mode neither runs
+  // planning nor checks for unplanned alloc_tile: implicit tmp buffers may stay
+  // address-less placeholders and are handled by the backend.
+  if (effectiveLevel == PTOBuildLevel::Level3) {
+    return success();
   }
-
-  if (effectiveLevel != PTOBuildLevel::Level3) {
-    pto::PlanMemoryOptions planMemoryOptions;
-    planMemoryOptions.memMode = "local";
-    bool effectivePlanMemoryOrderBySize = planMemoryOrderBySize;
-    if (planMemoryImpl == "modern" &&
-        planMemoryOrderBySize.getNumOccurrences() == 0) {
-      effectivePlanMemoryOrderBySize = true;
-    }
-    planMemoryOptions.orderBySize = effectivePlanMemoryOrderBySize;
-    if (planMemoryImpl == "legacy") {
-      pm.addPass(pto::createPlanMemoryPass(planMemoryOptions));
-    } else {
-      pm.addPass(pto::createPlanMemoryModernPass(planMemoryOptions));
-    }
-  }
+  pto::PlanMemoryOptions planMemoryOptions;
+  planMemoryOptions.memMode = "local";
+  planMemoryOptions.orderBySize = planMemoryOrderBySize;
+  // Whether addresses are assigned is controlled by --enable-plan-memory
+  // (on by default). When planning is off the pass is still added so that it
+  // verifies no live pto.alloc_tile is left without an address.
+  planMemoryOptions.enabled = enablePlanMemory;
+  pm.addPass(pto::createPlanMemoryModernPass(planMemoryOptions));
   return success();
 }
 
@@ -1306,16 +1361,18 @@ static LogicalResult appendPlanMemoryPasses(PassManager &pm,
 /// BufidSync is A5-only get_buf/rls_buf synchronization. Sync
 /// runs BEFORE PTOResolveBufferSelect so it sees per-use `pto.multi_tile_get`
 /// operations and keeps their slot identity for alias and event-id analysis.
-static void appendAutoSyncPasses(PassManager &pm) {
-  if (enableInsertSync) {
+static void appendAutoSyncPasses(PassManager &pm, StringRef arch) {
+  if (enableUnifiedSync) {
+    pm.addNestedPass<func::FuncOp>(pto::createPTOUnifiedSyncPass(arch == "a5" ? 32u : 0u, enableUnifiedSyncDebug,
+                                                                 unifiedSyncForceMechanism, checkAddrReuseWar));
+  } else if (enableInsertSync) {
     if (emitMlirIR) {
       pm.addPass(std::make_unique<SerialAutoSyncPass>(
           SerialAutoSyncPass::Mode::InsertSync, false));
     } else {
       pm.addNestedPass<func::FuncOp>(pto::createPTOInsertSyncPass());
     }
-  }
-  else if (enableBufidSync) {
+  } else if (enableBufidSync) {
     if (emitMlirIR) {
       pm.addPass(std::make_unique<SerialAutoSyncPass>(
           SerialAutoSyncPass::Mode::Bufid, enableBufidSyncDebug));
@@ -1335,25 +1392,42 @@ static void appendAutoSyncPasses(PassManager &pm) {
   }
 }
 
-static LogicalResult runMainLoweringPipeline(
-    OwningOpRef<ModuleOp> &module, PTOASContext &context,
-    PTOBackend effectiveBackend, const CompilePipelineState &state,
-    PTOASCompileResult &result, bool emitVPTOHostStub, bool &handled,
-    int &exitCode) {
-  handled = false;
-  exitCode = 0;
-  const bool enableA5EmitCFusionPath = state.enableA5EmitCFusionPath;
-  const bool enableA5VPTOFusionPath = state.enableA5VPTOFusionPath;
+// Appends read-only synchronization gates and optional reports.
+static void appendSyncOraclePasses(PassManager &pm, const CompilePipelineState &state) {
+  if (checkSyncIds) {
+    pm.addNestedPass<mlir::func::FuncOp>(
+        pto::createPTOCheckSyncIdsPass(state.arch == "a5" ? 32u : 0u, checkSyncIdsInjectFault));
+  }
+  if (checkSyncInterference) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncInterferencePass(checkSyncInterferenceInjectFault));
+  }
+  if (checkSyncSelfCoverage) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncSelfCoveragePass());
+  }
+  if (dumpSyncExtract) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTODumpSyncExtractPass());
+  }
+  if (dumpSyncCoverage) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTODumpSyncCoveragePass());
+  }
+  if (!checkSyncCoverage.empty()) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncCoveragePass(checkSyncCoverage));
+  }
+  if (dumpSyncCounts) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTODumpSyncCountsPass());
+  }
+  if (!checkSyncCountFloor.empty()) {
+    pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOCheckSyncCountFloorPass(checkSyncCountFloor));
+  }
+}
+
+// Populates the shared mainline lowering pass sequence (both backends).
+static LogicalResult populateMainLoweringPasses(PassManager &pm,
+                                                PTOBackend effectiveBackend,
+                                                const CompilePipelineState &state) {
   const bool isA2A3 = state.isA2A3;
   const bool hasTileOpsToExpand = state.hasTileOpsToExpand;
   const PTOBuildLevel effectiveLevel = state.level;
-
-  // Main PassManager
-  PassManager pm(module->getContext());
-
-  if (failed(applyPassManagerCLOptions(pm))) {
-    return failure();
-  }
 
   // Rank-2 → rank-5 view canonicalization is currently gated on the VPTO
   // backend to limit blast radius.  A3/A5 EmitC codegen already pads strides
@@ -1376,9 +1450,6 @@ static LogicalResult runMainLoweringPipeline(
   if (!isA2A3) {
     pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOA5NormalizeTMovPass());
   }
-  pm.addNestedPass<mlir::func::FuncOp>(
-      pto::createPTOValidateIntToPtrUsesPass());
-
   // PTODSL legality discovery happens on tile-native PTO IR before fusion.
   // Fusion may later filter the ordered `candidates` array; ExpandTileOp
   // consumes the first candidate that remains.
@@ -1386,8 +1457,9 @@ static LogicalResult runMainLoweringPipeline(
     pm.addPass(pto::createInsertTemplateAttributesPass());
   }
 
-  if (failed(appendFusionFrontendPasses(pm, isA2A3, enableA5EmitCFusionPath,
-                                         enableA5VPTOFusionPath))) {
+  if (failed(appendFusionFrontendPasses(pm, isA2A3,
+                                        state.enableA5EmitCFusionPath,
+                                        state.enableA5VPTOFusionPath))) {
     return failure();
   }
 
@@ -1397,13 +1469,17 @@ static LogicalResult runMainLoweringPipeline(
   pm.addNestedPass<mlir::func::FuncOp>(
       pto::createPTORematerializeFixpipeVectorQuantPass());
 
-  if (failed(appendPlanMemoryPasses(pm, effectiveLevel))) {
+  if (failed(appendPlanMemoryPasses(pm, effectiveLevel, enablePlanMemory))) {
     return failure();
   }
   pm.addPass(pto::createPTOResolveReservedBuffersPass());
   pm.addNestedPass<mlir::func::FuncOp>(pto::createPTORemoveIdentityTMovPass());
 
-  appendAutoSyncPasses(pm);
+  appendAutoSyncPasses(pm, state.arch);
+
+  // Oracle gates. Read-only apart from diagnostics, and each fails the pipeline on
+  // a violation rather than reporting and continuing.
+  appendSyncOraclePasses(pm, state);
 
   // Materialize each `pto.multi_tile_get` as an addressed `pto.alloc_tile`;
   // dynamic selections use an `arith.select` chain over planned addresses.
@@ -1411,7 +1487,75 @@ static LogicalResult runMainLoweringPipeline(
   if (effectiveBackend == PTOBackend::EmitC) {
     pm.addPass(createNarrowUnusedMultiResultProvenancePass());
   }
+  return success();
+}
 
+// Backend-agnostic cleanup after the shared lowering. --emit-pto-ir stops
+// before this segment: the IR dump reflects the shared lowering only.
+static LogicalResult appendMainLoweringTailPasses(PassManager &pm,
+                                                  PTOBackend effectiveBackend) {
+  pm.addPass(createCSEPass());
+  // PTODSL backend helpers already use the tile-native ABI.
+  pm.addPass(pto::createPTOInlineBackendHelpersPass());
+  if (effectiveBackend == PTOBackend::EmitC) {
+    pm.addPass(createNarrowUnusedMultiResultProvenancePass());
+  }
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+  return applyConfiguredPassManagerCLOptions(pm, "main PTOAS pipeline");
+}
+
+// Runs the populated mainline pipeline for the VPTO backend, emits the seam
+// IR dumps, hands off to the VPTO backend pipeline, and produces the result.
+static LogicalResult finishVPTOMainPipeline(
+    OwningOpRef<ModuleOp> &module, PassManager &pm,
+    PTOASCompileResult &result, PTOASContext &context, bool emitVPTOHostStub,
+    bool hasTileOpsToExpand, bool &handled, int &exitCode) {
+  if (failed(pm.run(*module))) {
+    llvm::errs() << "Error: Pass execution failed.\n";
+    return failure();
+  }
+
+  if (ptoPrintSeamIR) {
+    printSharedPreBackendSeamIR(*module);
+  }
+  if (ptoPrintSeamIR) {
+    module->print(llvm::errs());
+    llvm::errs() << "\n";
+  }
+  if (failed(emitSharedPreBackendSeamIR(*module, ptoSeamIRFile))) {
+    return failure();
+  }
+
+  if (failed(runVPTOBackendPipeline(module, hasTileOpsToExpand))) {
+    return failure();
+  }
+  handled = true;
+  exitCode = emitVPTOBackendResult(*module, result, emitVPTOHostStub,
+                                   context.getCANNVersionOrDefault());
+  return success();
+}
+
+static LogicalResult runMainLoweringPipeline(
+    OwningOpRef<ModuleOp> &module, PTOASContext &context,
+    PTOBackend effectiveBackend, const CompilePipelineState &state,
+    PTOASCompileResult &result, bool emitVPTOHostStub, bool &handled,
+    int &exitCode) {
+  handled = false;
+  exitCode = 0;
+  const bool hasTileOpsToExpand = state.hasTileOpsToExpand;
+
+  // Main PassManager
+  PassManager pm(module->getContext());
+  if (failed(applyPassManagerCLOptions(pm))) {
+    return failure();
+  }
+  if (failed(populateMainLoweringPasses(pm, effectiveBackend, state))) {
+    return failure();
+  }
+
+  // --emit-pto-ir dumps the module after the shared lowering segment only;
+  // the backend tail (CSE / helper inlining) is intentionally not run.
   if (emitMlirIR) {
     if (failed(pm.run(*module))) {
       llvm::errs() << "Error: Pass execution failed.\n";
@@ -1426,42 +1570,14 @@ static LogicalResult runMainLoweringPipeline(
     return success();
   }
 
-  pm.addPass(createCSEPass());
-  // PTODSL backend helpers already use the tile-native ABI.
-  pm.addPass(pto::createPTOInlineBackendHelpersPass());
-  if (effectiveBackend == PTOBackend::EmitC) {
-    pm.addPass(createNarrowUnusedMultiResultProvenancePass());
-  }
-  pm.addPass(createCanonicalizerPass());
-  pm.addPass(createCSEPass());
-  if (failed(applyConfiguredPassManagerCLOptions(pm, "main PTOAS pipeline"))) {
+  if (failed(appendMainLoweringTailPasses(pm, effectiveBackend))) {
     return failure();
   }
 
   if (effectiveBackend == PTOBackend::VPTO) {
-    if (failed(pm.run(*module))) {
-      llvm::errs() << "Error: Pass execution failed.\n";
-      return failure();
-    }
-
-    if (ptoPrintSeamIR) {
-      printSharedPreBackendSeamIR(*module);
-    }
-    if (ptoPrintSeamIR) {
-      module->print(llvm::errs());
-      llvm::errs() << "\n";
-    }
-    if (failed(emitSharedPreBackendSeamIR(*module, ptoSeamIRFile))) {
-      return failure();
-    }
-
-    if (failed(runVPTOBackendPipeline(module, hasTileOpsToExpand))) {
-      return failure();
-    }
-    handled = true;
-    exitCode = emitVPTOBackendResult(*module, result, emitVPTOHostStub,
-                                     context.getCANNVersionOrDefault());
-    return success();
+    return finishVPTOMainPipeline(module, pm, result, context,
+                                  emitVPTOHostStub, hasTileOpsToExpand,
+                                  handled, exitCode);
   }
 
   if (failed(pm.run(*module))) {

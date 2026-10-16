@@ -8,6 +8,9 @@
 
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s
 // RUN: ptoas --pto-arch=a5 --emit-vpto %s -o - | FileCheck %s --check-prefix=ATTR
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s --check-prefix=DEFAULT
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vmi-fastmath %s -o - | FileCheck %s --check-prefix=FAST
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto --vmi-fastmath=false %s -o - | FileCheck %s --check-prefix=STRICT
 
 module attributes {pto.target_arch = "a5"} {
   module attributes {pto.backend = "vpto", pto.kernel_kind = #pto.kernel_kind<vector>} {
@@ -30,12 +33,27 @@ module attributes {pto.target_arch = "a5"} {
         %offset: index) {
       %c16 = arith.constant 16 : index
       %aligned_offset = arith.muli %offset, %c16 : index
-      %x16 = pto.vmi.vload %src[%aligned_offset] {dist_mode = "continuous"}
+      %x16 = pto.vmi.vload %src[%aligned_offset]
           : !pto.ptr<f16, ub> -> !pto.vmi.vreg<128xf16>
       %x32 = pto.vmi.vcvt %x16
           : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
       pto.vmi.vstore %x32, %dst[%aligned_offset]
           : !pto.vmi.vreg<128xf32>, !pto.ptr<f32, ub>
+      return
+    }
+
+    func.func @vmi_ptoas_cli_fastmath_f32_bf16(
+        %src: !pto.ptr<f32, ub>,
+        %dst: !pto.ptr<bf16, ub>,
+        %offset: index) {
+      %c64 = arith.constant 64 : index
+      %aligned_offset = arith.muli %offset, %c64 : index
+      %wide = pto.vmi.vload %src[%aligned_offset]
+          : !pto.ptr<f32, ub> -> !pto.vmi.vreg<64xf32>
+      %narrow = pto.vmi.vcvt %wide {rounding = "Z", saturate = "NOSAT"}
+          : !pto.vmi.vreg<64xf32> -> !pto.vmi.vreg<64xbf16>
+      pto.vmi.vstore %narrow, %dst[%aligned_offset]
+          : !pto.vmi.vreg<64xbf16>, !pto.ptr<bf16, ub>
       return
     }
   }
@@ -66,3 +84,16 @@ module attributes {pto.target_arch = "a5"} {
 // ATTR-NOT: pto.vmi.
 // ATTR-NOT: !pto.vmi.
 // ATTR-NOT: unrealized_conversion_cast
+
+// DEFAULT-LABEL: func.func @vmi_ptoas_cli_fastmath_f32_bf16
+// DEFAULT: pto.vdintlv
+// DEFAULT-NOT: pto.vcvt
+
+// FAST-LABEL: func.func @vmi_ptoas_cli_fastmath_f32_bf16
+// FAST: pto.vdintlv
+// FAST-NOT: pto.vmi.
+// FAST-NOT: !pto.vmi.
+
+// STRICT-LABEL: func.func @vmi_ptoas_cli_fastmath_f32_bf16
+// STRICT: pto.vcvt
+// STRICT-NOT: pto.vdintlv
