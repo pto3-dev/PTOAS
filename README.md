@@ -418,10 +418,16 @@ CLI architecture takes precedence over module metadata. A1 supports EmitC;
 VPTO and mixed architecture modules are rejected. The EmitC-only build above
 can be used with upstream LLVM 19.
 
-The initial executable profile accepts static, full, row-major FP16 Vec tiles
-and contiguous two-dimensional ND transfers. Rows must be aligned to 32 bytes;
-TADD requires complete 128-element repeats. Only load/add/store, pointer/view
-construction, allocation, block indices, and local synchronization are enabled.
+The executable vector profile accepts static, full, row-major FP16/FP32 Vec tiles
+and static two-dimensional ND transfers with contiguous or strided rows. Row
+strides and widths must be aligned to 32 bytes, and partitions must fit their
+source views;
+Binary arithmetic masks a final incomplete 256-byte repeat (128 FP16 or
+64 FP32 elements per complete repeat); DMA rows remain 32-byte aligned.
+Load/store, `TADD`, `TSUB`, `TMUL`, pointer/view construction, allocation, block
+indices, and local synchronization are enabled.
+Allocation valid-row/column operands that prove the complete static tile
+shape are normalized to static type dimensions, including PyPTO output.
 Unsupported types, layouts, operations, transfer modes and event ID 7 fail
 compilation. Dynamic valid shapes, BF16, atomics, matrix operations, cross-core
 synchronization and persistent execution need separate backend features.
@@ -450,3 +456,33 @@ ptoas --pto-arch=a1 --plan-memory-impl=modern \
 
 A1 targets real Ascend 310P hardware. CPU simulation checks the numerical
 reference only and does not model 310P pipeline or memory behavior.
+
+The A1 matrix profile supports initialized FP16 multiplication with
+K=N=16 and aligned full M rows from 16 through 2048, producing FP32 output.
+Aligned ND inputs load into ZZ or NZ Mat tiles, moves prepare NZ Left and ZN
+Right operands, and an explicit `single_mode_vec0` move writes the FP32 NZ
+accumulator into a matching FP32 ND Vec tile before storing. Acc-to-Vec runs on
+`PIPE_V` on A1; A3/A5 retain FIX mapping. Larger K/N, partial rows, dual
+worker modes, fused activation and direct accumulator stores are rejected.
+
+A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
+`NONE` rounding and saturation `OFF`, without scratch. The allocator must place
+source/destination in disjoint buffers, except exact-alias FP32-to-FP16 narrowing.
+Unsupported modes and known partial or widening overlaps are rejected before EmitC.
+
+The narrow A1 GEMM profile extends M to full static multiples of 16 through 2048
+while K=N=16. The single outer column of Mat/Acc fractals keeps ND element order.
+Memory budgets apply to the complete row tile; larger K/N and partial
+rows remain unavailable.
+
+A1 `pto.tmatmul.acc` supports in-place accumulation in this narrow profile. Input and output must be the same SSA accumulator buffer, initialized by `pto.tmatmul`; unit flags and result-valued forms are rejected. EmitC calls the release-guarded A1 `TMATMUL_ACC` API.
+
+A1 matrix loads also accept static aligned ND row strides for Nx16 FP16 panels. Partition sizes, aligned offsets and source bounds retain their checks. The ISA uses row bursts for 16-bit DMA gaps and individual row copies for wider gaps, enabling panels from wider K/N matrices while each MAD remains K=N=16.
+
+A1 `TEXP` and `TDIV` accept full static ND FP16/FP32 Vec tiles with default precision, including masked final repeats. High-precision modes are rejected before EmitC. These native approximate instructions allow a tensor-form SiLU composition; scalar broadcasts and other activation families remain separate features.
+
+A1 `pto.texpands` broadcasts an FP16/FP32 scalar into a full static ND Vec tile. Final masked repeats and 255-repeat splitting use the matching ISA implementation; unvalidated layouts and dtypes retain their rejection checks.
+
+A1 supports static FP16/FP32 `TROWSUM`, `TROWMAX`, `TCOLSUM` and `TCOLMAX`. Row results are aligned packed column-major Mx1 Vec buffers with full-size disjoint row-major scratch; matching contiguous Mx1 ND/DN views share their DMA path. Column sum supports only the sequential no-scratch form. Column results may reuse the exact first source row; partial overlaps, insufficient scratch and unaligned packed offsets are rejected before EmitC. Sum accumulation retains the input dtype; dynamic/unaligned tails and reduction-result broadcasts remain separate features.
+
+The A1 static FP16/FP32 Vec profile supports `pto.trowexpand` from packed column-major Mx1 results and `pto.tcolexpand` from row-major 1xN results into aligned row-major MxN tiles. Buffers must be disjoint, except a column source may share the exact first destination row. Dynamic shapes, partial overlaps and fused broadcast arithmetic remain unsupported.

@@ -1597,6 +1597,7 @@ int mlir::pto::compilePTOASModule(
       failed(validateFusionConfiguration(state, effectiveBackend))) {
     return 1;
   }
+  pto::normalizeA1StaticValidShapes(*module);
   if (state.arch == "a1" &&
       (effectiveBackend != PTOBackend::EmitC ||
        failed(pto::validateA1Capabilities(*module))))
