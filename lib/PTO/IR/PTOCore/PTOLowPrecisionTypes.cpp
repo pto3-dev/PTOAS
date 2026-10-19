@@ -134,6 +134,8 @@ static VerifierTargetArch getVerifierTargetArch(Operation *op) {
   switch (getPTOParserTargetArch(op ? op->getContext() : nullptr)) {
   case PTOParserTargetArch::A5:
     return VerifierTargetArch::A5;
+  // A1 shares structural checks; its instruction constraints are checked before lowering.
+  case PTOParserTargetArch::A1:
   case PTOParserTargetArch::A3:
   case PTOParserTargetArch::Unspecified:
     return VerifierTargetArch::A2A3;

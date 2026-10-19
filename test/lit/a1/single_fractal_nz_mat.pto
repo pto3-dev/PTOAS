@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_single_fractal_gemm(%out: !pto.ptr<f32>, %lhs: !pto.ptr<f16>, %rhs: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %size = arith.constant 16 : index
+    %lhs_view = pto.make_tensor_view %lhs, shape = [%size, %size], strides = [%size, %one] : !pto.tensor_view<?x?xf16>
+    %rhs_view = pto.make_tensor_view %rhs, shape = [%size, %size], strides = [%size, %one] : !pto.tensor_view<?x?xf16>
+    %out_view = pto.make_tensor_view %out, shape = [%size, %size], strides = [%size, %one] : !pto.tensor_view<?x?xf32>
+    %lhs_part = pto.partition_view %lhs_view, offsets = [%zero, %zero], sizes = [%size, %size] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %rhs_part = pto.partition_view %rhs_view, offsets = [%zero, %zero], sizes = [%size, %size] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%size, %size] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %ma = pto.alloc_tile : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %mb = pto.alloc_tile : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %a = pto.alloc_tile : !pto.tile_buf<left, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %b = pto.alloc_tile : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>
+    %c = pto.alloc_tile : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>
+    %v = pto.alloc_tile : !pto.tile_buf<vec, 16x16xf32>
+    pto.tload ins(%lhs_part : !pto.partition_tensor_view<16x16xf16>) outs(%ma : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tload ins(%rhs_part : !pto.partition_tensor_view<16x16xf16>) outs(%mb : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tmov ins(%ma : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%a : !pto.tile_buf<left, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tmov ins(%mb : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%b : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    pto.tmatmul ins(%a, %b : !pto.tile_buf<left, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>, !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>) outs(%c : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>)
+    pto.tmov ins(%c : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>) outs(%v : !pto.tile_buf<vec, 16x16xf32>) {accToVecMode = #pto.acc_to_vec_mode<single_mode_vec0>}
+    pto.tstore ins(%v : !pto.tile_buf<vec, 16x16xf32>) outs(%out_part : !pto.partition_tensor_view<16x16xf32>)
+    return
+  }
+}
+
+// CHECK-NOT: PIPE_FIX
+// CHECK: a1_single_fractal_gemm(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE1,
+// CHECK: TMOV(
+// CHECK: set_flag(PIPE_MTE1, PIPE_M,
+// CHECK: TMATMUL(
+// CHECK: set_flag(PIPE_M, PIPE_V,
+// CHECK: TMOV<{{.*}}pto::AccToVecMode::SingleModeVec0
+// CHECK: set_flag(PIPE_V, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK-NOT: PIPE_FIX

@@ -132,6 +132,7 @@ private:
  
   static const llvm::DenseMap<std::pair<PipelineType, PipelineType>, uint64_t>
       reservedEventIdNum;
+  bool isA1Target_{false};
   uint64_t reservedBlockSyncEventIdNum{0};
 };
  

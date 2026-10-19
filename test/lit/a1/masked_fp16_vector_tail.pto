@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
+// RUN: not ptoas --enable-insert-sync=false %s -o - 2>&1 | FileCheck %s --check-prefix=NO-SYNC
+// RUN: ptoas --enable-inject-barrier-all-sync %s -o - | FileCheck %s --check-prefix=BARRIER
+// RUN: ptoas --pto-arch=A1 --emit-pto-ir %s -o - | FileCheck %s --check-prefix=IR
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_vector_add(%out: !pto.ptr<f16>, %lhs: !pto.ptr<f16>, %rhs: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 1 : index
+    %cols = arith.constant 16 : index
+    %lhs_view = pto.make_tensor_view %lhs, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %rhs_view = pto.make_tensor_view %rhs, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %out_view = pto.make_tensor_view %out, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %lhs_part = pto.partition_view %lhs_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<1x16xf16>
+    %rhs_part = pto.partition_view %rhs_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<1x16xf16>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<1x16xf16>
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 1x16xf16>
+    %b = pto.alloc_tile : !pto.tile_buf<vec, 1x16xf16>
+    %c = pto.alloc_tile : !pto.tile_buf<vec, 1x16xf16>
+    pto.tload ins(%lhs_part : !pto.partition_tensor_view<1x16xf16>) outs(%a : !pto.tile_buf<vec, 1x16xf16>)
+    pto.tload ins(%rhs_part : !pto.partition_tensor_view<1x16xf16>) outs(%b : !pto.tile_buf<vec, 1x16xf16>)
+    pto.tmul ins(%a, %b : !pto.tile_buf<vec, 1x16xf16>, !pto.tile_buf<vec, 1x16xf16>) outs(%c : !pto.tile_buf<vec, 1x16xf16>)
+    pto.tstore ins(%c : !pto.tile_buf<vec, 1x16xf16>) outs(%out_part : !pto.partition_tensor_view<1x16xf16>)
+    return
+  }
+}
+
+// CHECK: a1_vector_add(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: wait_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TMUL(
+// CHECK: TSTORE(
+// CHECK-NOT: set_ffts_base_addr
+// CHECK-NOT: EVENT_ID7
+// IR: pto.target_arch = "a1"
+// IR: pto.tmul
+
+// NO-SYNC: A1 requires local automatic synchronization
+
+// BARRIER: pipe_barrier(PIPE_ALL)
+// BARRIER: TMUL(
+// BARRIER: TSTORE(

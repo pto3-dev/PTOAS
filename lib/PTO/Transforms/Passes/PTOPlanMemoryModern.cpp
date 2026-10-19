@@ -8,6 +8,7 @@
 
 //===- PTOPlanMemoryModern.cpp - modern static local memory planner -------===//
 
+#include "PTO/Support/A1Target.h"
 #include <limits>
 #include <tuple>
 #include "PTO/IR/PTOMultiBuffer.h"
@@ -197,6 +198,10 @@ static bool isA5IgnoredTmpAlloc(pto::AllocTileOp allocTile) {
 }
 
 static MemSpec getMemSpec(PTOArch arch, AddressSpace space) {
+  if (arch == PTOArch::A1) {
+    auto spec = getA1MemorySpec(space);
+    return {spec.capacityBytes, spec.alignmentBytes};
+  }
   switch (space) {
   case AddressSpace::VEC:
     return {arch == PTOArch::A5 ? 253952ULL : 196608ULL, 256};
@@ -434,7 +439,8 @@ struct PlannerAnalysis {
 
   explicit PlannerAnalysis(func::FuncOp func) : func(func) {
     facts.targetHazardEnabled =
-        getTargetArch(func.getOperation()) == PTOArch::A3;
+        getTargetArch(func.getOperation()) == PTOArch::A3 ||
+        getTargetArch(func.getOperation()) == PTOArch::A1;
   }
 
   RootList getRoots(Value value) const {

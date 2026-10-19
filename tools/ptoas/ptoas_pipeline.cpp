@@ -11,6 +11,7 @@
 // compilePTOASModule entry.
 //===----------------------------------------------------------------------===//
 
+#include "PTO/Support/A1Target.h"
 #include "ptoas_internal.h"
 
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
@@ -148,7 +149,7 @@ static bool isA2A3Arch(llvm::StringRef arch) {
 
 static bool isSupportedPTOASTargetArch(llvm::StringRef arch) {
   std::string normalized = normalizeArch(arch);
-  return normalized == "a2" || normalized == "a3" || normalized == "a5";
+  return normalized == "a1" || normalized == "a2" || normalized == "a3" || normalized == "a5";
 }
 
 static std::optional<std::string> getModuleTargetArchAttr(ModuleOp module) {
@@ -395,6 +396,10 @@ struct ReserveBufferMemSpec {
 
 static ReserveBufferMemSpec getReserveBufferMemSpec(PTOArch arch,
                                                     AddressSpace space) {
+  if (arch == PTOArch::A1) {
+    auto spec = getA1MemorySpec(space);
+    return {spec.capacityBytes, spec.alignmentBytes};
+  }
   switch (space) {
   case AddressSpace::VEC:
     return {arch == PTOArch::A5 ? 253952uLL : 196608uLL, 256};
@@ -1365,7 +1370,7 @@ static void appendAutoSyncPasses(PassManager &pm, StringRef arch) {
   if (enableUnifiedSync) {
     pm.addNestedPass<func::FuncOp>(pto::createPTOUnifiedSyncPass(arch == "a5" ? 32u : 0u, enableUnifiedSyncDebug,
                                                                  unifiedSyncForceMechanism, checkAddrReuseWar));
-  } else if (enableInsertSync) {
+  } else if (enableInsertSync || (arch == "a1" && !enableInjectBarrierAllSync)) {
     if (emitMlirIR) {
       pm.addPass(std::make_unique<SerialAutoSyncPass>(
           SerialAutoSyncPass::Mode::InsertSync, false));
@@ -1447,7 +1452,7 @@ static LogicalResult populateMainLoweringPasses(PassManager &pm,
   // PTOViewToMemref is generic view lowering required by both backends; keep it
   // outside the local-memory planning gate so default A2/A3 EmitC still lowers
   // pto.make_tensor_view before backend legalization.
-  if (!isA2A3) {
+  if (state.arch == "a5") {
     pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOA5NormalizeTMovPass());
   }
   // PTODSL legality discovery happens on tile-native PTO IR before fusion.
@@ -1608,9 +1613,13 @@ static int runVPTOSkipMainlinePipeline(OwningOpRef<ModuleOp> &module,
 
 static LogicalResult runEmitCPreparationPipeline(OwningOpRef<ModuleOp> &module,
                                                  llvm::StringRef arch) {
+  if (arch == "a1" && failed(pto::validateA1Capabilities(*module)))
+    return failure();
   PassManager emitcPM(module->getContext());
   emitcPM.enableVerifier();
-  if (isA2A3Arch(arch)) {
+  if (arch == "a1") {
+    emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A1));
+  } else if (isA2A3Arch(arch)) {
     emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A3));
   } else {
     emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A5));
@@ -1702,6 +1711,22 @@ int mlir::pto::compilePTOASModule(
   if (failed(initializeCompilePipelineState(module, context, effectiveBackend,
                                             state)) ||
       failed(validateFusionConfiguration(state, effectiveBackend))) {
+    return 1;
+  }
+  pto::normalizeA1StaticValidShapes(*module);
+  if (state.arch == "a1" &&
+      (effectiveBackend != PTOBackend::EmitC ||
+       failed(pto::validateA1Capabilities(*module))))
+    return 1;
+  if (state.arch == "a1" && enableUnifiedSync) {
+    llvm::errs() << "Error: A1 unified synchronization is not yet supported; "
+                    "use local set/wait or barrier-all synchronization.\n";
+    return 1;
+  }
+  if (state.arch == "a1" && enableInsertSync.getNumOccurrences() &&
+      !enableInsertSync && !enableInjectBarrierAllSync) {
+    llvm::errs() << "Error: A1 requires local automatic synchronization; "
+                    "use --enable-inject-barrier-all-sync for the conservative mode.\n";
     return 1;
   }
   setFusionPipelineFlags(state, effectiveBackend);

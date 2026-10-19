@@ -166,6 +166,13 @@ message(STATUS "MLIR CMake Dir: ${MLIR_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 include(AddMLIR)
 
+# EmitC-only builds use upstream LLVM 19 without VPTO-specific LLVM types
+# or calling conventions. The full VPTO-enabled build remains the default.
+option(PTOAS_EMITC_ONLY_BUILD "Build only the EmitC backend with upstream LLVM" OFF)
+if(PTOAS_EMITC_ONLY_BUILD)
+  add_compile_definitions(PTOAS_EMITC_ONLY_BUILD=1)
+endif()
+
 # =========================================================
 # 3. 配置构建环境
 # =========================================================

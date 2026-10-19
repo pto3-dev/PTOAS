@@ -1,0 +1,34 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_conversion(%out: !pto.ptr<f16>, %input: !pto.ptr<f32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %cols = arith.constant 16 : index
+    %input_view = pto.make_tensor_view %input, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %out_view = pto.make_tensor_view %out, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %input_part = pto.partition_view %input_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x16xf32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<1x16xf16>
+    %src = pto.alloc_tile : !pto.tile_buf<vec, 1x16xf32>
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 1x16xf16>
+    pto.tload ins(%input_part : !pto.partition_tensor_view<1x16xf32>) outs(%src : !pto.tile_buf<vec, 1x16xf32>)
+    pto.tcvt ins(%src {rmode = #pto<round_mode NONE>, satmode = #pto<saturation_mode OFF>} : !pto.tile_buf<vec, 1x16xf32>) outs(%dst : !pto.tile_buf<vec, 1x16xf16>)
+    pto.tstore ins(%dst : !pto.tile_buf<vec, 1x16xf16>) outs(%out_part : !pto.partition_tensor_view<1x16xf16>)
+    return
+  }
+}
+// CHECK: a1_conversion(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: RoundMode [[ROUND:[A-Za-z0-9_]+]] = RoundMode::CAST_NONE
+// CHECK: SaturationMode [[SAT:[A-Za-z0-9_]+]] = SaturationMode::OFF
+// CHECK: TCVT({{.*}}[[ROUND]], [[SAT]])
+// CHECK: set_flag(PIPE_V, PIPE_MTE3,
+// CHECK: TSTORE(

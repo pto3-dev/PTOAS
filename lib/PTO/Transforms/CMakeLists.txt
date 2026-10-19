@@ -21,6 +21,28 @@ if(TARGET vfsim::ir_planner)
     $<BUILD_INTERFACE:vfsim::ir_planner>)
 endif()
 
+set(_ptoas_vpto_llvm_full_sources
+  VPTO/VPTOCANN900LLVMEmitterCommon.cpp
+  VPTO/VPTOCANN900LLVMEmitterUbuf.cpp
+  VPTO/VPTOCANN900LLVMEmitter.cpp
+  VPTO/VPTOCANN900LLVMEmitterArithmeticPatterns.cpp
+  VPTO/VPTOCANN900LLVMEmitterCalleeCore.cpp
+  VPTO/VPTOCANN900LLVMEmitterCalleeMemory.cpp
+  VPTO/VPTOCANN900LLVMEmitterMemoryPatterns.cpp
+  VPTO/VPTOCANN900LLVMEmitterPacking.cpp
+  VPTO/VPTOCANN900LLVMEmitterPipeline.cpp
+  VPTO/VPTOCANN900LLVMEmitterScalarPatterns.cpp
+  VPTO/VPTOCANN900LLVMEmitterTypeHelpers.cpp
+  VPTO/VPTOCANN900LLVMEmitterTypePatterns.cpp
+)
+if(PTOAS_EMITC_ONLY_BUILD)
+  set(_ptoas_vpto_llvm_sources VPTOEmissionUnavailable.cpp)
+  list(APPEND LLVM_OPTIONAL_SOURCES ${_ptoas_vpto_llvm_full_sources})
+else()
+  set(_ptoas_vpto_llvm_sources ${_ptoas_vpto_llvm_full_sources})
+  list(APPEND LLVM_OPTIONAL_SOURCES VPTOEmissionUnavailable.cpp)
+endif()
+
 # VMIToVPTO lowering internals are textual include units of VMIToVPTO.cpp.
 # They are listed here so LLVM per-directory source check is satisfied and
 # marked HEADER_FILE_ONLY so they are not compiled as separate translation
@@ -49,6 +71,7 @@ set_source_files_properties(${_ptoas_vmi_split_units} PROPERTIES HEADER_FILE_ONL
 add_mlir_dialect_library(PTOTransforms
   ENABLE_AGGREGATION
 
+  A1TargetValidation.cpp
   TileFusion/FusionAnalysis.cpp
   TileFusion/FusionOpSemantics.cpp
   TileFusion/PTOPreFusionAnalysis.cpp
@@ -63,18 +86,7 @@ add_mlir_dialect_library(PTOTransforms
   TileFusion/PTOVexpdifFusion.cpp
   TileFusion/PTOUnrollAfterLoopFusion.cpp
   TileFusion/PTOFlattenFusionRegion.cpp
-  VPTO/VPTOCANN900LLVMEmitterCommon.cpp
-  VPTO/VPTOCANN900LLVMEmitterUbuf.cpp
-  VPTO/VPTOCANN900LLVMEmitter.cpp
-  VPTO/VPTOCANN900LLVMEmitterArithmeticPatterns.cpp
-  VPTO/VPTOCANN900LLVMEmitterCalleeCore.cpp
-  VPTO/VPTOCANN900LLVMEmitterCalleeMemory.cpp
-  VPTO/VPTOCANN900LLVMEmitterMemoryPatterns.cpp
-  VPTO/VPTOCANN900LLVMEmitterPacking.cpp
-  VPTO/VPTOCANN900LLVMEmitterPipeline.cpp
-  VPTO/VPTOCANN900LLVMEmitterScalarPatterns.cpp
-  VPTO/VPTOCANN900LLVMEmitterTypeHelpers.cpp
-  VPTO/VPTOCANN900LLVMEmitterTypePatterns.cpp
+  ${_ptoas_vpto_llvm_sources}
   VPTO/VPTOLLVMEmitterDispatcher.cpp
   VPTO/VPTOLLVMEmitterHelper.cpp
   VPTO/VPTOPtrNormalize.cpp
@@ -371,8 +383,8 @@ target_compile_options(PTOTransforms PRIVATE -Wno-overloaded-virtual)
 # move assignment is inlined: moving the SyncModel temporary returned by
 # unified::buildSyncModel() into the member at PTOUnifiedSync.cpp triggers a bogus
 # "__builtin_memmove ... out of bounds" on the SmallVector<HiddenReservation>
-# inline storage. The access is in-bounds; GCC mis-models the small buffer. Keep
-# the warning visible but non-fatal for just this one unit, mirroring the project's
+# inline storage. The access is in-bounds; GCC models the small buffer incorrectly.
+# Keep the warning visible but non-fatal for this unit, mirroring the project's
 # -Wno-error=deprecated-declarations policy for upstream/compiler churn. Clang does
 # not emit this, so scope it to GNU.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

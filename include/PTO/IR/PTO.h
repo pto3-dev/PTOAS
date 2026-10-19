@@ -148,6 +148,7 @@ AddressSpaceAttr getPTOAddressSpaceAttr(Type type);
 enum class PTOArch {
   A3,
   A5,
+  A1,
 };
 
 /// The semantic form selected by the optional third tile of pto.tmov.  The
@@ -164,6 +165,8 @@ TMovForm classifyTMovForm(Value fp);
 /// Resolve the effective PTO target architecture from module-level IR state.
 PTOArch getTargetArch(ModuleOp module);
 PTOArch getTargetArch(Operation *op);
+bool isTargetArchA1(ModuleOp module);
+bool isTargetArchA1(Operation *op);
 bool isTargetArchA3(ModuleOp module);
 bool isTargetArchA5(ModuleOp module);
 bool isTargetArchA3(Operation *op);
@@ -173,6 +176,7 @@ enum class PTOParserTargetArch {
   Unspecified,
   A3,
   A5,
+  A1,
 };
 
 void setPTOParserTargetArch(MLIRContext *context, PTOParserTargetArch arch);

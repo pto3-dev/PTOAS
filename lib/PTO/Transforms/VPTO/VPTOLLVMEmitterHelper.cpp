@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTO/Support/CodeConstants.h"
+#include "PTO/Support/LLVMCallingConvention.h"
 #include "PTO/Transforms/VPTOLLVMEmitterHelper.h"
 
 #include "PTO/IR/PTO.h"
@@ -740,7 +741,7 @@ void attachHIVMKernelAnnotations(llvm::Module &llvmModule,
         if (!call) {
           continue;
         }
-        if (call->getCallingConv() == llvm::CallingConv::SimtEntry) {
+        if (mlir::pto::isSimtEntryCallingConvention(call->getCallingConv())) {
           return true;
         }
       }
@@ -779,7 +780,7 @@ void attachHIVMKernelAnnotations(llvm::Module &llvmModule,
     if (function.isDeclaration()) {
       continue;
     }
-    if (function.getCallingConv() == llvm::CallingConv::SimtEntry) {
+    if (mlir::pto::isSimtEntryCallingConvention(function.getCallingConv())) {
       uint32_t maxThreads = kDefaultSimtMaxThreads;
       if (auto it = simtMaxThreadsByName.find(function.getName());
           it != simtMaxThreadsByName.end()) {
