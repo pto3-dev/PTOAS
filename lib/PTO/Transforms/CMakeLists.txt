@@ -140,6 +140,7 @@ add_mlir_dialect_library(PTOTransforms
   PTOLowerToOpLibCalls.cpp
   PTOInstantiateAndInlineOpLib.cpp
   PTOToEmitC.cpp
+  A1TargetValidation.cpp
   CppPostprocess.cpp
   Utils.cpp
   OptMemPlanForPipeline.cpp

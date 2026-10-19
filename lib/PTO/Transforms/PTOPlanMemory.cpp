@@ -9,6 +9,7 @@
 //===- PlanMemory.cpp ----Plan Buffer Memory Address ----------------------===//
 //===----------------------------------------------------------------------===//
 
+#include "PTO/Support/A1Target.h"
 #include "PTO/Support/CodeConstants.h"
 #include "PTOPlanMemory.h"
 
@@ -115,6 +116,11 @@ static size_t plannerAlignBitsFromBytes(size_t alignBytes) {
 }
 
 static LocalMemSpec getLocalMemSpec(Operation *op, AddressSpace as) {
+  if (isTargetArchA1(op)) {
+    auto spec = getA1MemorySpec(as);
+    return {static_cast<int64_t>(spec.capacityBytes * kBitsPerByte),
+            static_cast<int64_t>(spec.alignmentBytes)};
+  }
   switch (as) {
   case AddressSpace::VEC:
     return isTargetArchA5(op)
@@ -2562,6 +2568,21 @@ LogicalResult MemPlan::InitMemSpecsFromModule(func::FuncOp funcOp) {
 
   // Default to a3.
   applySpec(kA3);
+
+  if (isTargetArchA1(funcOp.getOperation())) {
+    auto vec = getA1MemorySpec(AddressSpace::VEC);
+    auto mat = getA1MemorySpec(AddressSpace::MAT);
+    auto left = getA1MemorySpec(AddressSpace::LEFT);
+    auto right = getA1MemorySpec(AddressSpace::RIGHT);
+    auto acc = getA1MemorySpec(AddressSpace::ACC);
+    applySpec({static_cast<int>(vec.capacityBytes * 8), static_cast<int>(mat.capacityBytes * 8),
+               static_cast<int>(left.capacityBytes * 8), static_cast<int>(right.capacityBytes * 8),
+               static_cast<int>(acc.capacityBytes * 8), static_cast<int>(vec.alignmentBytes * 8),
+               static_cast<int>(mat.alignmentBytes * 8), static_cast<int>(acc.alignmentBytes * 8),
+               static_cast<int>(left.alignmentBytes * 8), static_cast<int>(right.alignmentBytes * 8),
+               8, 0, 8, 0});
+    return success();
+  }
 
   // --pto-arch options:
   // a3 -> default memory spec

@@ -15,6 +15,7 @@
 #include "ObjectEmission.h"
 #include "PTO/IR/PTO.h"
 #include "PTO/Support/CodeConstants.h"
+#include "PTO/Support/A1Target.h"
 #include "PTO/Transforms/Passes.h"
 #include "VPTOHostStubEmission.h"
 #include "ptoas.h"
@@ -112,7 +113,7 @@ static std::string normalizePTOASArch(llvm::StringRef archValue) {
 }
 
 static bool isSupportedPTOASArch(llvm::StringRef archValue) {
-  return archValue == "a2" || archValue == "a3" || archValue == "a5";
+  return archValue == "a1" || archValue == "a2" || archValue == "a3" || archValue == "a5";
 }
 
 constexpr size_t kArchRegexCaptureGroupCount = 3;
@@ -151,7 +152,7 @@ static bool resolveTextInputArch(llvm::StringRef buffer, bool cliArchSpecified,
   if (cliArchSpecified) {
     if (!isSupportedPTOASArch(arch)) {
       llvm::errs() << "Error: invalid --pto-arch='" << mlir::pto::ptoTargetArch
-                   << "'. Expected 'a2', 'a3', or 'a5'.\n";
+                   << "'. Expected 'a1', 'a2', 'a3', or 'a5'.\n";
       return false;
     }
     return true;
@@ -193,8 +194,9 @@ parseTextualModule(std::unique_ptr<llvm::MemoryBuffer> inputBuffer,
   llvm::SourceMgr sourceMgr;
   sourceMgr.AddNewSourceBuffer(std::move(inputBuffer), llvm::SMLoc());
   mlir::pto::ScopedPTOParserTargetArch scopedParserArch(
-      &context, arch == "a5" ? mlir::pto::PTOParserTargetArch::A5
-                             : mlir::pto::PTOParserTargetArch::A3);
+      &context, arch == "a1" ? mlir::pto::PTOParserTargetArch::A1
+                : arch == "a5" ? mlir::pto::PTOParserTargetArch::A5
+                               : mlir::pto::PTOParserTargetArch::A3);
   ParserConfig parserConfig(&context);
   Block parsedBlock;
   LocationAttr sourceFileLoc = UnknownLoc::get(&context);
@@ -234,7 +236,7 @@ loadInputModule(std::unique_ptr<llvm::MemoryBuffer> inputBuffer,
     arch = normalizePTOASArch(mlir::pto::ptoTargetArch);
     if (cliArchSpecified && !isSupportedPTOASArch(arch)) {
       llvm::errs() << "Error: invalid --pto-arch='" << mlir::pto::ptoTargetArch
-                   << "'. Expected 'a2', 'a3', or 'a5'.\n";
+                   << "'. Expected 'a1', 'a2', 'a3', or 'a5'.\n";
       return {};
     }
     module = decodePTOBCModule(buffer, context);
@@ -249,6 +251,11 @@ loadInputModule(std::unique_ptr<llvm::MemoryBuffer> inputBuffer,
   }
 
   Operation *moduleOp = module.get().getOperation();
+  if (!cliArchSpecified && !moduleOp->hasAttr("pto.target_arch")) {
+    if (auto spec = moduleOp->getAttrOfType<StringAttr>("pto.device-spec"))
+      if (spec.getValue().starts_with("Ascend310P"))
+        arch = "a1";
+  }
   if (cliArchSpecified) {
     moduleOp->setAttr("pto.target_arch",
                       mlir::StringAttr::get(moduleOp->getContext(), arch));
@@ -1337,6 +1344,16 @@ static LogicalResult buildBackendInfo(ModuleOp module, bool cliBackendSpecified,
     return failure();
   }
 
+  if (mlir::pto::isTargetArchA1(module) &&
+      (backendInfo.singleBackend != mlir::pto::PTOBackend::EmitC ||
+       mlir::pto::emitVPTO || mlir::pto::emitVPTOLLVMDialect)) {
+    return module.emitError("A1 currently supports only the EmitC backend.");
+  }
+  // Check the intact module before the driver splits nested modules into jobs.
+  // Otherwise a child can lose its A1 parent and bypass the target contract.
+  mlir::pto::normalizeA1StaticValidShapes(module);
+  if (failed(mlir::pto::validateA1Capabilities(module)))
+    return failure();
 #ifdef PTOAS_EMITC_ONLY_BUILD
   if (!backendInfo.singleBackend) {
     return module.emitError(

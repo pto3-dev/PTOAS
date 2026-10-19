@@ -363,6 +363,17 @@ static bool isA5DeviceSpec(StringRef spec) {
   return spec.starts_with("Ascend950") || spec.starts_with("Ascend910_95");
 }
 
+static bool isA1ModuleTarget(ModuleOp module) {
+  for (ModuleOp current = module; current;
+       current = current->getParentOfType<ModuleOp>()) {
+    if (auto arch = current->getAttrOfType<StringAttr>(kPTOTargetArchAttrName))
+      return arch.getValue().equals_insensitive("a1");
+    if (auto spec = current->getAttrOfType<StringAttr>("pto.device-spec"))
+      return spec.getValue().starts_with("Ascend310P");
+  }
+  return false;
+}
+
 static bool isA5ModuleTarget(ModuleOp module) {
   if (!module) {
     return false;
@@ -379,11 +390,15 @@ static bool isA5ModuleTarget(ModuleOp module) {
 }
 
 PTOArch mlir::pto::getTargetArch(ModuleOp module) {
+  if (isA1ModuleTarget(module))
+    return PTOArch::A1;
   if (isA5ModuleTarget(module)) {
     return PTOArch::A5;
   }
 
   switch (getPTOParserTargetArch(module ? module.getContext() : nullptr)) {
+  case PTOParserTargetArch::A1:
+    return PTOArch::A1;
   case PTOParserTargetArch::A5:
     return PTOArch::A5;
   case PTOParserTargetArch::A3:
@@ -401,6 +416,8 @@ PTOArch mlir::pto::getTargetArch(Operation *op) {
     return getTargetArch(module);
   }
   switch (getPTOParserTargetArch(op->getContext())) {
+  case PTOParserTargetArch::A1:
+    return PTOArch::A1;
   case PTOParserTargetArch::A5:
     return PTOArch::A5;
   case PTOParserTargetArch::A3:
@@ -408,6 +425,14 @@ PTOArch mlir::pto::getTargetArch(Operation *op) {
     break;
   }
   return PTOArch::A3;
+}
+
+bool mlir::pto::isTargetArchA1(ModuleOp module) {
+  return getTargetArch(module) == PTOArch::A1;
+}
+
+bool mlir::pto::isTargetArchA1(Operation *op) {
+  return getTargetArch(op) == PTOArch::A1;
 }
 
 bool mlir::pto::isTargetArchA3(ModuleOp module) {
@@ -636,6 +661,9 @@ static VerifierTargetArch getVerifierTargetArch(Operation *op) {
   switch (getPTOParserTargetArch(op ? op->getContext() : nullptr)) {
   case PTOParserTargetArch::A5:
     return VerifierTargetArch::A5;
+  // A1 uses the common rank/layout structural checks. Its instruction and
+  // resource constraints are checked separately before lowering.
+  case PTOParserTargetArch::A1:
   case PTOParserTargetArch::A3:
   case PTOParserTargetArch::Unspecified:
     return VerifierTargetArch::A2A3;
@@ -9776,6 +9804,68 @@ static LogicalResult verifyTMovImpl(TMovOp op, bool isA5) {
     return verifyTMovXToZz(op, isA5);
   }
   return verifyTMovGeneric(op, isA5);
+}
+
+::mlir::pto::PIPE mlir::pto::TMovOp::getPipe()
+{
+    // TMOV spans multiple hardware pipelines depending on the source/dest
+    // domains. Most tile-domain moves are executed by MTE1 (e.g. MAT->L0),
+    // while UB->UB copies are vector-pipe operations.
+    auto getASFromType = [](Type ty) -> std::optional<::mlir::pto::AddressSpace> {
+        if (auto tb = llvm::dyn_cast<::mlir::pto::TileBufType>(ty)) {
+            if (auto as = llvm::dyn_cast_or_null<::mlir::pto::AddressSpaceAttr>(tb.getMemorySpace()))
+                return as.getAddressSpace();
+            return std::nullopt;
+        }
+        return std::nullopt;
+    };
+
+    auto sOpt = getASFromType(getSrc().getType());
+    auto dOpt = getASFromType(getDst().getType());
+    if (!sOpt.has_value() || !dOpt.has_value())
+        return ::mlir::pto::PIPE::PIPE_V;
+
+    const auto s = sOpt.value();
+    const auto d = dOpt.value();
+
+    // UB -> UB copy is vector pipe.
+    if (s == ::mlir::pto::AddressSpace::VEC && d == ::mlir::pto::AddressSpace::VEC) {
+        return ::mlir::pto::PIPE::PIPE_V;
+    }
+
+    // MAT -> L0A/L0B/Bias moves run on MTE1.
+    if ((s == ::mlir::pto::AddressSpace::MAT &&
+         (d == ::mlir::pto::AddressSpace::LEFT || d == ::mlir::pto::AddressSpace::RIGHT ||
+          d == ::mlir::pto::AddressSpace::BIAS))) {
+        return ::mlir::pto::PIPE::PIPE_MTE1;
+    }
+
+    if (s == ::mlir::pto::AddressSpace::MAT && d == ::mlir::pto::AddressSpace::SCALING) {
+        // PTOAS uses SCALING for two distinct PTO-ISA destinations. A5 MX
+        // scale tiles are ScaleLeft/ScaleRight loads into L0A/L0B and run on
+        // MTE1. Regular Scaling tiles are FBUF loads (TMOV_M2S) and run on
+        // Distinguish the MX-only f8E8M0 type from regular scaling tiles.
+        Type dstElemTy;
+        if (auto tb = llvm::dyn_cast<::mlir::pto::TileBufType>(getDst().getType()))
+            dstElemTy = tb.getElementType();
+        if (dstElemTy && llvm::isa<::mlir::pto::F8E8M0Type>(dstElemTy))
+            return ::mlir::pto::PIPE::PIPE_MTE1;
+        return ::mlir::pto::PIPE::PIPE_FIX;
+    }
+
+    // Coupled A1 accumulator writeback executes on the vector pipeline.
+    if (s == ::mlir::pto::AddressSpace::ACC && d == ::mlir::pto::AddressSpace::VEC &&
+        ::mlir::pto::isTargetArchA1(getOperation()))
+        return ::mlir::pto::PIPE::PIPE_V;
+
+    // ACC -> MAT / VEC use FIX on A3/A5.
+    if (s == ::mlir::pto::AddressSpace::ACC &&
+        (d == ::mlir::pto::AddressSpace::MAT || d == ::mlir::pto::AddressSpace::VEC)) {
+        return ::mlir::pto::PIPE::PIPE_FIX;
+    }
+
+    // Fallback: treat as vector pipe (safe default for most intra-domain moves).
+    return ::mlir::pto::PIPE::PIPE_V;
 }
 
 mlir::LogicalResult mlir::pto::TMovOp::verify() {

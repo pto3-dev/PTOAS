@@ -11,6 +11,7 @@
 // compilePTOASModule entry.
 //===----------------------------------------------------------------------===//
 
+#include "PTO/Support/A1Target.h"
 #include "ptoas_internal.h"
 
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
@@ -148,7 +149,7 @@ static bool isA2A3Arch(llvm::StringRef arch) {
 
 static bool isSupportedPTOASTargetArch(llvm::StringRef arch) {
   std::string normalized = normalizeArch(arch);
-  return normalized == "a2" || normalized == "a3" || normalized == "a5";
+  return normalized == "a1" || normalized == "a2" || normalized == "a3" || normalized == "a5";
 }
 
 static std::optional<std::string> getModuleTargetArchAttr(ModuleOp module) {
@@ -395,6 +396,10 @@ struct ReserveBufferMemSpec {
 
 static ReserveBufferMemSpec getReserveBufferMemSpec(PTOArch arch,
                                                     AddressSpace space) {
+  if (arch == PTOArch::A1) {
+    auto spec = getA1MemorySpec(space);
+    return {spec.capacityBytes, spec.alignmentBytes};
+  }
   switch (space) {
   case AddressSpace::VEC:
     return {arch == PTOArch::A5 ? 253952uLL : 196608uLL, 256};
@@ -1306,8 +1311,8 @@ static LogicalResult appendPlanMemoryPasses(PassManager &pm,
 /// BufidSync is A5-only get_buf/rls_buf synchronization. Sync
 /// runs BEFORE PTOResolveBufferSelect so it sees per-use `pto.multi_tile_get`
 /// operations and keeps their slot identity for alias and event-id analysis.
-static void appendAutoSyncPasses(PassManager &pm) {
-  if (enableInsertSync) {
+static void appendAutoSyncPasses(PassManager &pm, bool forceLocalSync) {
+  if (enableInsertSync || (forceLocalSync && !enableInjectBarrierAllSync)) {
     if (emitMlirIR) {
       pm.addPass(std::make_unique<SerialAutoSyncPass>(
           SerialAutoSyncPass::Mode::InsertSync, false));
@@ -1373,7 +1378,7 @@ static LogicalResult runMainLoweringPipeline(
   // PTOViewToMemref is generic view lowering required by both backends; keep it
   // outside the local-memory planning gate so default A2/A3 EmitC still lowers
   // pto.make_tensor_view before backend legalization.
-  if (!isA2A3) {
+  if (state.arch == "a5") {
     pm.addNestedPass<mlir::func::FuncOp>(pto::createPTOA5NormalizeTMovPass());
   }
   pm.addNestedPass<mlir::func::FuncOp>(
@@ -1403,7 +1408,7 @@ static LogicalResult runMainLoweringPipeline(
   pm.addPass(pto::createPTOResolveReservedBuffersPass());
   pm.addNestedPass<mlir::func::FuncOp>(pto::createPTORemoveIdentityTMovPass());
 
-  appendAutoSyncPasses(pm);
+  appendAutoSyncPasses(pm, state.arch == "a1");
 
   // Materialize each `pto.multi_tile_get` as an addressed `pto.alloc_tile`;
   // dynamic selections use an `arith.select` chain over planned addresses.
@@ -1492,9 +1497,13 @@ static int runVPTOSkipMainlinePipeline(OwningOpRef<ModuleOp> &module,
 
 static LogicalResult runEmitCPreparationPipeline(OwningOpRef<ModuleOp> &module,
                                                  llvm::StringRef arch) {
+  if (arch == "a1" && failed(pto::validateA1Capabilities(*module)))
+    return failure();
   PassManager emitcPM(module->getContext());
   emitcPM.enableVerifier();
-  if (isA2A3Arch(arch)) {
+  if (arch == "a1") {
+    emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A1));
+  } else if (isA2A3Arch(arch)) {
     emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A3));
   } else {
     emitcPM.addPass(pto::createEmitPTOManualPass(pto::PTOArch::A5));
@@ -1586,6 +1595,17 @@ int mlir::pto::compilePTOASModule(
   if (failed(initializeCompilePipelineState(module, context, effectiveBackend,
                                             state)) ||
       failed(validateFusionConfiguration(state, effectiveBackend))) {
+    return 1;
+  }
+  pto::normalizeA1StaticValidShapes(*module);
+  if (state.arch == "a1" &&
+      (effectiveBackend != PTOBackend::EmitC ||
+       failed(pto::validateA1Capabilities(*module))))
+    return 1;
+  if (state.arch == "a1" && enableInsertSync.getNumOccurrences() &&
+      !enableInsertSync && !enableInjectBarrierAllSync) {
+    llvm::errs() << "Error: A1 requires local automatic synchronization; "
+                    "use --enable-inject-barrier-all-sync for the conservative mode.\n";
     return 1;
   }
   setFusionPipelineFlags(state, effectiveBackend);
