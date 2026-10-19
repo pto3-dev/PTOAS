@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 --plan-memory-impl=modern %s -o - | FileCheck %s
+// RUN: ptoas --plan-memory-impl=legacy %s -o - | FileCheck %s
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_col_broadcast_f32(%input: !pto.ptr<f32>, %output: !pto.ptr<f32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 16 : index
+    %cols = arith.constant 80 : index
+    %iv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %ov = pto.make_tensor_view %output, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %ip = pto.partition_view %iv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<16x80xf32>
+    %op = pto.partition_view %ov, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x80xf32>
+    %src = pto.alloc_tile : !pto.tile_buf<vec, 16x80xf32>
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 1x80xf32>
+    pto.tload ins(%ip : !pto.partition_tensor_view<16x80xf32>) outs(%src : !pto.tile_buf<vec, 16x80xf32>)
+    pto.tcolmax ins(%src : !pto.tile_buf<vec, 16x80xf32>) outs(%dst : !pto.tile_buf<vec, 1x80xf32>)
+    %expanded = pto.alloc_tile : !pto.tile_buf<vec, 16x80xf32>
+    pto.tcolexpand ins(%dst : !pto.tile_buf<vec, 1x80xf32>) outs(%expanded : !pto.tile_buf<vec, 16x80xf32>)
+    return
+  }
+}
+// CHECK: TCOLMAX(
+// CHECK: TCOLEXPAND(
