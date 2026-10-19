@@ -71,11 +71,14 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
     if (!space || space.getAddressSpace() != AddressSpace::VEC ||
         (!tile.getElementType().isF16() && !tile.getElementType().isF32()))
         return op->emitError("A1 vector lowering requires FP16 or FP32 Vec tiles.");
+    const bool packedColumn = shape.size() == 2 && shape[1] == 1 && tile.getBLayoutValueI32() == 1;
     if (shape.size() != 2 || shape[0] <= 0 || shape[1] <= 0 || tile.getValidShape() != shape ||
-        tile.getBLayoutValueI32() != 0 || tile.getSLayoutValueI32() != 0 || tile.getCompactModeI32() != 0)
+        (!packedColumn && tile.getBLayoutValueI32() != 0) || tile.getSLayoutValueI32() != 0 ||
+        tile.getCompactModeI32() != 0)
         return op->emitError("A1 vector lowering requires static full row-major tile shapes.");
     const unsigned elementBytes = vectorElementBytes(tile.getElementType());
-    if (shape[1] % (32 / elementBytes) || shape[0] > static_cast<int64_t>(kA1UBCapacityBytes / elementBytes) / shape[1])
+    if ((packedColumn ? shape[0] : shape[1]) % (32 / elementBytes) ||
+        shape[0] > static_cast<int64_t>(kA1UBCapacityBytes / elementBytes) / shape[1])
         return op->emitError("A1 vector tile must have 32-byte-aligned rows and fit the 128 KiB UB budget.");
     if (auto alloc = dyn_cast<AllocTileOp>(op)) {
         if (alloc.getAddr()) {
@@ -91,18 +94,23 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
 LogicalResult validateView(MakeTensorViewOp view)
 {
     auto type = cast<TensorViewType>(view.getResult().getType());
-    if ((view.getLayoutAttr() && view.getLayoutAttr().getLayout() != Layout::ND) ||
-        (type.getLayoutAttr() && type.getLayoutAttr().getLayout() != Layout::ND))
-        return view.emitError("A1 vector DMA requires ND tensor views.");
     if (view.getShape().size() != 2 || view.getStrides().size() != 2)
         return view.emitError("A1 vector lowering requires two-dimensional tensor views.");
     auto rows = constantInt(view.getShape()[0]);
     auto cols = constantInt(view.getShape()[1]);
     auto rowStride = constantInt(view.getStrides()[0]);
     auto colStride = constantInt(view.getStrides()[1]);
-    if (!rows || !cols || !rowStride || *rows <= 0 || *cols <= 0 || *rowStride < *cols || colStride != 1 ||
-        *cols % (32 / vectorElementBytes(type.getElementType())) ||
-        *rowStride % (32 / vectorElementBytes(type.getElementType())))
+    const unsigned block = 32 / vectorElementBytes(type.getElementType());
+    const bool packedColumn =
+        rows && cols == 1 && rowStride == 1 && colStride && *colStride > 0 && *rows > 0 && *rows % block == 0;
+    auto supportedLayout = [&](Layout layout) {
+        return layout == Layout::ND || (packedColumn && layout == Layout::DN);
+    };
+    if ((view.getLayoutAttr() && !supportedLayout(view.getLayoutAttr().getLayout())) ||
+        (type.getLayoutAttr() && !supportedLayout(type.getLayoutAttr().getLayout())))
+        return view.emitError("A1 vector DMA requires ND tensor views or contiguous packed DN columns.");
+    if (!packedColumn && (!rows || !cols || !rowStride || *rows <= 0 || *cols <= 0 || *rowStride < *cols ||
+                          colStride != 1 || *cols % block || *rowStride % block))
         return view.emitError("A1 vector lowering requires static non-overlapping 32-byte-aligned tensor rows.");
     return success();
 }
@@ -125,6 +133,10 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
         return op->emitError("A1 DMA requires matching static tile sizes and nonnegative aligned partition offsets.");
     if (failed(validateView(view)))
         return failure();
+    const bool packedTile = tile.getShape()[1] == 1 && tile.getBLayoutValueI32() == 1;
+    if (packedTile && (constantInt(view.getShape()[1]) != 1 || constantInt(view.getStrides()[0]) != 1 ||
+                       rowOffset % (32 / vectorElementBytes(tile.getElementType()))))
+        return op->emitError("A1 packed column DMA requires a contiguous Mx1 view and aligned row offset.");
     const int64_t viewRows = *constantInt(view.getShape()[0]);
     const int64_t viewCols = *constantInt(view.getShape()[1]);
     if (*rows > viewRows || *cols > viewCols || rowOffset > viewRows - *rows || colOffset > viewCols - *cols)
@@ -195,8 +207,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TDivOp, TExpOp, TExpandsOp, TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp,
-                SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
+                TDivOp, TExpOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp,
+                TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp,
+                BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -244,10 +257,63 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         };
         if (isa<TAddOp, TSubOp, TMulOp, TDivOp, TExpOp>(op))
             for (Value operand : op->getOperands())
+                if (locationOf(operand) != AddressSpace::VEC ||
+                    cast<TileBufType>(operand.getType()).getBLayoutValueI32() != 0)
+                    return reject("A1 vector arithmetic requires row-major Vec operands.");
+        if (isa<TRowExpandOp, TColExpandOp>(op)) {
+            Value source = op->getOperand(0), destination = op->getOperand(1);
+            auto src = cast<TileBufType>(source.getType());
+            auto dst = cast<TileBufType>(destination.getType());
+            const bool row = isa<TRowExpandOp>(op);
+            if (locationOf(source) != AddressSpace::VEC || locationOf(destination) != AddressSpace::VEC ||
+                dst.getBLayoutValueI32() != 0 || src.getBLayoutValueI32() != (row ? 1 : 0))
+                return reject(
+                    "A1 expansion requires a row-major Vec destination and packed Mx1 or row-major 1xN source.");
+            auto sa = source.getDefiningOp<AllocTileOp>(), da = destination.getDefiningOp<AllocTileOp>();
+            const int64_t sp = sa ? constantInt(sa.getAddr()).value_or(-1) : -1;
+            const int64_t dp = da ? constantInt(da.getAddr()).value_or(-1) : -1;
+            const int64_t sb = src.getShape()[0] * src.getShape()[1] * vectorElementBytes(src.getElementType());
+            const int64_t db = dst.getShape()[0] * dst.getShape()[1] * vectorElementBytes(dst.getElementType());
+            const bool alias = !row && (source == destination || (sp >= 0 && dp == sp));
+            if (!alias && (source == destination || (sp >= 0 && dp >= 0 && sp < dp + db && dp < sp + sb)))
+                return reject("A1 expansion requires disjoint storage except exact first-row column sources.");
+        }
+        if (isa<TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp>(op)) {
+            for (Value operand : op->getOperands())
                 if (locationOf(operand) != AddressSpace::VEC)
-                    return reject("A1 vector arithmetic requires Vec operands.");
+                    return reject("A1 reductions require Vec operands.");
+            for (unsigned i = 0; i < op->getNumOperands(); ++i) {
+                for (unsigned j = i + 1; j < op->getNumOperands(); ++j) {
+                    Value a = op->getOperand(i), b = op->getOperand(j);
+                    auto aa = a.getDefiningOp<AllocTileOp>(), ba = b.getDefiningOp<AllocTileOp>();
+                    const int64_t ap = aa ? constantInt(aa.getAddr()).value_or(-1) : -1;
+                    const int64_t bp = ba ? constantInt(ba.getAddr()).value_or(-1) : -1;
+                    auto at = cast<TileBufType>(a.getType()), bt = cast<TileBufType>(b.getType());
+                    const int64_t ab = at.getShape()[0] * at.getShape()[1] * vectorElementBytes(at.getElementType());
+                    const int64_t bb = bt.getShape()[0] * bt.getShape()[1] * vectorElementBytes(bt.getElementType());
+                    const bool firstRowAlias = isa<TColSumOp, TColMaxOp>(op) && op->getNumOperands() == 2 &&
+                                               bt.getShape()[0] == 1 && at.getShape()[1] == bt.getShape()[1] &&
+                                               (a == b || (ap >= 0 && bp == ap));
+                    if (!firstRowAlias && (a == b || (ap >= 0 && bp >= 0 && ap < bp + bb && bp < ap + ab)))
+                        return reject("A1 reductions require disjoint storage except exact first-row column results.");
+                }
+            }
+            if (isa<TRowSumOp, TRowMaxOp>(op)) {
+                if (op->getNumOperands() != 3)
+                    return reject("A1 row reductions require explicit full-size scratch.");
+                auto source = cast<TileBufType>(op->getOperand(0).getType());
+                auto scratch = cast<TileBufType>(op->getOperand(1).getType());
+                if (source.getBLayoutValueI32() != 0 || scratch.getBLayoutValueI32() != 0 ||
+                    scratch.getShape()[0] < source.getShape()[0] || scratch.getShape()[1] < source.getShape()[1])
+                    return reject("A1 row reductions require row-major source and full-size row-major scratch.");
+            }
+        }
+        if (auto sum = dyn_cast<TColSumOp>(op))
+            if (sum.getTmp() || sum.getIsBinary())
+                return reject("A1 column sum supports the sequential form without scratch only.");
         if (auto fill = dyn_cast<TExpandsOp>(op))
-            if (locationOf(fill.getDst()) != AddressSpace::VEC)
+            if (locationOf(fill.getDst()) != AddressSpace::VEC ||
+                cast<TileBufType>(fill.getDst().getType()).getBLayoutValueI32() != 0)
                 return reject("A1 scalar broadcast requires a Vec destination.");
         if (auto divide = dyn_cast<TDivOp>(op))
             if (divide.getPrecisionType() != DivPrecision::Default)
@@ -301,8 +367,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 return reject("A1 conversion requires tile-buffer operands.");
             if (locationOf(convert.getSrc()) != AddressSpace::VEC ||
                 locationOf(convert.getDst()) != AddressSpace::VEC ||
-                source.getElementType() == destination.getElementType() || convert.getTmp() ||
-                convert.getRmode() != RoundMode::NONE || convert.getSatMode() != SaturationMode::OFF)
+                source.getElementType() == destination.getElementType() || source.getBLayoutValueI32() != 0 ||
+                destination.getBLayoutValueI32() != 0 || convert.getTmp() || convert.getRmode() != RoundMode::NONE ||
+                convert.getSatMode() != SaturationMode::OFF)
                 return reject(
                     "A1 conversion requires an FP16/FP32 Vec pair, NONE rounding, saturation OFF and no scratch.");
             auto sourceAlloc = convert.getSrc().getDefiningOp<AllocTileOp>();
