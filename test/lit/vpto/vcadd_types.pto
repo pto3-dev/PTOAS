@@ -1,0 +1,133 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %s -o - | FileCheck %s
+
+module {
+
+  // CHECK-LABEL: func.func @vcadd_i16(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
+  func.func @vcadd_i16(%input: !pto.ptr<i16, ub>, %output: !pto.ptr<i32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+      %out_mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %src = pto.vlds %input[%c0] : !pto.ptr<i16, ub> -> !pto.vreg<128xi16>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<128xi16>, !pto.mask<b16> -> !pto.vreg<64xi32>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<64xi32>, !pto.ptr<i32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  // CHECK-LABEL: func.func @vcadd_si16(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<128xsi16>, !pto.mask<b16> -> !pto.vreg<64xsi32>
+  func.func @vcadd_si16(%input: !pto.ptr<si16, ub>, %output: !pto.ptr<si32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+      %out_mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %src = pto.vlds %input[%c0] : !pto.ptr<si16, ub> -> !pto.vreg<128xsi16>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<128xsi16>, !pto.mask<b16> -> !pto.vreg<64xsi32>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<64xsi32>, !pto.ptr<si32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  // CHECK-LABEL: func.func @vcadd_ui16(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<64xui32>
+  func.func @vcadd_ui16(%input: !pto.ptr<ui16, ub>, %output: !pto.ptr<ui32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+      %out_mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %src = pto.vlds %input[%c0] : !pto.ptr<ui16, ub> -> !pto.vreg<128xui16>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<64xui32>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<64xui32>, !pto.ptr<ui32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  // CHECK-LABEL: func.func @vcadd_i32(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+  func.func @vcadd_i32(%input: !pto.ptr<i32, ub>, %output: !pto.ptr<i32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %out_mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %src = pto.vlds %input[%c0] : !pto.ptr<i32, ub> -> !pto.vreg<64xi32>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<64xi32>, !pto.mask<b32> -> !pto.vreg<64xi32>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<64xi32>, !pto.ptr<i32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  // CHECK-LABEL: func.func @vcadd_si32(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<64xsi32>, !pto.mask<b32> -> !pto.vreg<64xsi32>
+  func.func @vcadd_si32(%input: !pto.ptr<si32, ub>, %output: !pto.ptr<si32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %out_mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %src = pto.vlds %input[%c0] : !pto.ptr<si32, ub> -> !pto.vreg<64xsi32>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<64xsi32>, !pto.mask<b32> -> !pto.vreg<64xsi32>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<64xsi32>, !pto.ptr<si32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  // CHECK-LABEL: func.func @vcadd_ui32(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+  func.func @vcadd_ui32(%input: !pto.ptr<ui32, ub>, %output: !pto.ptr<ui32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %out_mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %src = pto.vlds %input[%c0] : !pto.ptr<ui32, ub> -> !pto.vreg<64xui32>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<64xui32>, !pto.ptr<ui32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+
+  // CHECK-LABEL: func.func @vcadd_f16(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<128xf16>
+  func.func @vcadd_f16(%input: !pto.ptr<f16, ub>, %output: !pto.ptr<f16, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+      %out_mask = pto.pset_b16 "PAT_ALL" : !pto.mask<b16>
+      %src = pto.vlds %input[%c0] : !pto.ptr<f16, ub> -> !pto.vreg<128xf16>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<128xf16>, !pto.mask<b16> -> !pto.vreg<128xf16>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<128xf16>, !pto.ptr<f16, ub>, !pto.mask<b16>
+    }
+    return
+  }
+
+  // CHECK-LABEL: func.func @vcadd_f32(
+  // CHECK: pto.vcadd %{{.*}}, %{{.*}} : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+  func.func @vcadd_f32(%input: !pto.ptr<f32, ub>, %output: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %out_mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %src = pto.vlds %input[%c0] : !pto.ptr<f32, ub> -> !pto.vreg<64xf32>
+      %sum = pto.vcadd %src, %mask : !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      pto.vsts %sum, %output[%c0], %out_mask
+          : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+}

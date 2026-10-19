@@ -1,0 +1,52 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// The resolved scheduler policy must reach the cube device compilation instead
+// of stopping at getBishengSchedulerModeForTarget(). A stub CANN toolchain
+// makes the real fatobj chain fail on its first device compilation, which is
+// the cube object, so the printed Bisheng command line is the cube argv.
+// RUN: mkdir -p %t.cann/bin %t.cann/tools/bisheng_compiler/bin
+// RUN: printf '#!/bin/sh\nexit 1\n' > %t.cann/bin/bisheng
+// RUN: chmod +x %t.cann/bin/bisheng
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/cce-ld
+// RUN: cp %t.cann/bin/bisheng %t.cann/bin/ld.lld
+// RUN: cp %t.cann/bin/bisheng %t.cann/tools/bisheng_compiler/bin/bisheng
+// RUN: not env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto --bisheng-vec-misched=on %s -o %t.on.o 2>&1 | FileCheck %s --check-prefix=CUBE-ON
+// RUN: not env ASCEND_HOME_PATH=%t.cann ptoas --pto-arch=a5 --pto-backend=vpto --bisheng-vec-misched=auto %s -o %t.auto.o 2>&1 | FileCheck %s --check-prefix=CUBE-AUTO
+
+module attributes {pto.target_arch = "a5"} {
+  func.func @mixed_section_kernel(%arg0: !pto.ptr<i16, gm>)
+      attributes {pto.aicore} {
+    %c0 = arith.constant 0 : i64
+    %c1 = arith.constant 1 : i64
+    %ub = pto.castptr %c0 : i64 -> !pto.ptr<i16, ub>
+    %mat = pto.castptr %c0 : i64 -> !pto.ptr<i16, l1>
+
+    pto.section.vector {
+      pto.mte_gm_ub %arg0, %ub, %c0, %c1
+        nburst(%c1, %c1, %c1)
+        : !pto.ptr<i16, gm>, !pto.ptr<i16, ub>, i64, i64, i64, i64, i64
+    }
+
+    pto.section.cube {
+      pto.copy_ubuf_to_cbuf %ub, %mat, %c0, %c1, %c1, %c0, %c0
+        : !pto.ptr<i16, ub>, !pto.ptr<i16, l1>, i64, i64, i64, i64, i64
+    }
+
+    return
+  }
+}
+
+// An explicit on keeps the toolchain default on cube, so the cube command line
+// must not carry the disabled-scheduler argument.
+// CUBE-ON: Error: device LLVM compilation failed
+// CUBE-ON-NOT: --cce-aicore-vec-misched=0
+// CUBE-ON: -x ir
+
+// Auto never selects on for cube, so the historical disabled argument stays.
+// CUBE-AUTO: --cce-aicore-arch=dav-c310-cube{{.*}}--cce-aicore-vec-misched=0{{.*}}-x ir

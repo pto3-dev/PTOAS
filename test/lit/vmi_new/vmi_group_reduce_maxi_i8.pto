@@ -8,7 +8,9 @@
 // FOR A PARTICULAR PURPOSE. See LICENSE in the root of the software repository
 // for the full text of the License.
 
-// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+// RUN: not pto-test-opt %s -vmi-to-vpto 2>&1 | FileCheck %s
+// RUN: not ptoas --pto-arch=a5 --pto-level=level3 --pto-backend=vpto --emit-vpto %s -o %t 2>&1 | FileCheck %s
+// CHECK: VMI{{-}}UNSUPPORTED{{:}} 8-bit integer reductions are not supported
 
 module {
   func.func @group_reduce_maxi_i8(
@@ -20,6 +22,3 @@ module {
     return %max : !pto.vmi.vreg<8xi8>
   }
 }
-
-// CHECK-LABEL: func.func @group_reduce_maxi_i8(
-// CHECK: pto.vcgmax {{.*}} : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<256xi8>

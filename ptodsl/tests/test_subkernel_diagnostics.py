@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -7,7 +8,7 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-from ptodsl import pto, scalar
+from ptodsl import pto
 from ptodsl._host_tensors import TensorSpec
 
 
@@ -151,7 +152,7 @@ def inline_simt_value_escape_entry():
     meta_tile = pto.alloc_tile(shape=[1, 8], dtype=pto.i32, valid_shape=[1, 1])
     with pto.simt():
         leaked_tid = pto.get_tid_x()
-    scalar.store(leaked_tid, meta_tile.as_ptr() + 0)
+    pto.store(leaked_tid, meta_tile.as_ptr() + 0)
 
 
 def main() -> None:

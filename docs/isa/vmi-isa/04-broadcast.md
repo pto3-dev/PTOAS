@@ -60,6 +60,26 @@
   | `group` | positive integer | *(none — ungrouped)* | Number of group slots; must equal `input.L` for group mode |
 
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
+- **Bounded grouped vectors:** For the one-carrier lengths documented in
+  [Reduce](05-reduce.md), plus eight-bit integer lengths
+  `L = 1, 2, 4, 8, 64, 128, 256`, a group count of at most eight that divides `L`
+  broadcasts compact source slot `g` into logical lanes
+  `[g * L/C, (g + 1) * L/C)`. The A5 VPTO backend retains established native
+  layouts when available and uses a dense register-selection fallback otherwise.
+  The source can come from a short load or a grouped reduction. Padding lanes
+  in the physical register are not logical results. The dense fallback also
+  accepts stride-two and stride-four group slots produced by explicit 16-to-8
+  `NOSAT` narrowing after a supported wide reduction; selection reads the low byte of each
+  slot and ignores the intervening high bytes.
+- **Group slots and output layout:** Source-slot spacing and broadcast-output
+  spacing describe different values. Native 16-bit integer addition produces
+  eight low halfwords at positions `0, 2, ..., 14`, so its result is
+  `gs(8, 2)` independently of the broadcast consumer. Broadcast reads those
+  slots directly where supported, or uses a normal layout conversion to
+  consecutive slots. Its output layout is selected separately; for example,
+  a 64-element output can use `ls(2)` and a `PK_B32` packing store. That output
+  store does not by itself establish that source-slot packing is redundant.
+  See the [native integer sum layout](05-reduce.md#native-integer-sum-layout).
 - **lowering to `pto.mi`:**
 
   | Form | Physical lowering | `#mi` | `dep` |

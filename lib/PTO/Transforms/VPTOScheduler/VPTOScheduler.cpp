@@ -29,16 +29,18 @@ using namespace mlir::pto;
 namespace {
 
 constexpr unsigned kMaxClosureGroupNodes = 96;
+// Doubling the current pressure makes the check equivalent to a 50% threshold.
+constexpr int64_t kCriticalPressureMultiplier = 2;
 
 struct PressureClosureGroup {
   VPTOSUnit *target = nullptr;
   std::optional<unsigned> pressureSet;
-  SmallVector<unsigned, 2> bundleOriginalIndices;
-  SmallVector<Value, 2> targetValues;
+  SmallVector<unsigned> bundleOriginalIndices;
+  SmallVector<Value> targetValues;
   DenseSet<VPTOSUnit *> units;
-  SmallVector<VPTOSUnit *, 8> witness;
-  SmallVector<int64_t, 2> peak;
-  SmallVector<int64_t, 2> end;
+  SmallVector<VPTOSUnit *> witness;
+  SmallVector<int64_t> peak;
+  SmallVector<int64_t> end;
   unsigned steps = 0;
   int64_t supportPressure = 0;
   int64_t effectiveEnd = 0;
@@ -63,8 +65,10 @@ struct PressureClosureGroup {
 static void saturatingMultiplyAdd(int64_t lhs, int64_t rhs, int64_t &total) {
   int64_t product = 0;
   int64_t updated = 0;
-  bool scoreWouldOverflow = llvm::MulOverflow(lhs, rhs, product) ||
-                            llvm::AddOverflow(total, product, updated);
+  bool scoreWouldOverflow = llvm::MulOverflow(lhs, rhs, product) != 0;
+  if (!scoreWouldOverflow) {
+    scoreWouldOverflow = llvm::AddOverflow(total, product, updated) != 0;
+  }
   if (scoreWouldOverflow) {
     total = std::numeric_limits<int64_t>::max();
     return;
@@ -76,7 +80,8 @@ static bool isCriticalPressure(const VPTOSchedBoundary &boundary,
                                const VPTOSchedModel &model) {
   for (auto [index, pressureSet] : llvm::enumerate(model.getPressureSets())) {
     if (pressureSet.limit &&
-        boundary.getPressureTracker().getCurrent()[index] * 2 >=
+        boundary.getPressureTracker().getCurrent()[index] *
+                kCriticalPressureMultiplier >=
             static_cast<int64_t>(*pressureSet.limit)) {
       return true;
     }
@@ -123,11 +128,15 @@ initializeCandidate(VPTOSUnit &unit, const VPTOSchedBoundary &boundary,
                                pressure.projected,
                                0,
                                false};
-  candidate.opensPressureFrontier =
-      llvm::any_of(pressure.introduced,
-                   [](int64_t value) { return value > 0; }) &&
-      llvm::all_of(pressure.released,
-                   [](int64_t value) { return value == 0; });
+  // Register classes are not interchangeable: consuming a vector while
+  // producing a predicate still opens a new predicate live range. Treating
+  // any release as relief can hoist live-out masks across a pressure peak.
+  for (auto [introduced, released] : llvm::zip_equal(pressure.introduced, pressure.released)) {
+    if (introduced > 0 && released == 0) {
+      candidate.opensPressureFrontier = true;
+      break;
+    }
+  }
   candidate.advancesPressureClosure =
       closureGroup && closureGroup->units.contains(&unit);
   return candidate;
@@ -213,9 +222,11 @@ static LogicalResult runCandidateLookahead(VPTOSchedCandidate &candidate,
     if (!budget.consume(ready.size())) {
       return failure();
     }
-    auto best = llvm::min_element(ready, [&](VPTOSUnit *lhs, VPTOSUnit *rhs) {
-      return isBetterLookaheadUnit(lhs, rhs, tracker, model.getPressureSets());
-    });
+    auto best = llvm::min_element(
+        ready, [&tracker, &model](VPTOSUnit *lhs, VPTOSUnit *rhs) {
+          return isBetterLookaheadUnit(lhs, rhs, tracker,
+                                       model.getPressureSets());
+        });
     VPTOSUnit *selected = *best;
     ready.erase(best);
     if (failed(tracker.commit(*selected))) {
@@ -299,7 +310,7 @@ static bool isNearPressureSet(const VPTOSchedBoundary &boundary,
   }
   int64_t current = boundary.getPressureTracker().getCurrent()[index];
   int64_t limit = static_cast<int64_t>(*pressureSets[index].limit);
-  return current * 2 >= limit;
+  return current * kCriticalPressureMultiplier >= limit;
 }
 
 static std::optional<unsigned>
@@ -364,7 +375,7 @@ static bool isValueBefore(Value lhs, Value rhs, const VPTOSchedDAG &dag) {
   return llvm::find(dag.getLiveIns(), lhs) < llvm::find(dag.getLiveIns(), rhs);
 }
 
-static SmallVector<Value, 2>
+static SmallVector<Value>
 buildPressureBundle(Value value, VPTOPressureSetID pressureSet,
                     const VPTORegPressureTracker &tracker,
                     const VPTOSchedModel &model, const VPTOSchedDAG &dag,
@@ -377,7 +388,7 @@ buildPressureBundle(Value value, VPTOPressureSetID pressureSet,
   if (!checkedDefinitions.insert(definingOp).second) {
     return {};
   }
-  SmallVector<Value, 2> bundle;
+  SmallVector<Value> bundle;
   for (Value result : definingOp->getResults()) {
     bool contributes =
         tracker.isLive(result) &&
@@ -409,7 +420,8 @@ static FailureOr<ClosureBundleUsers> collectClosureBundleUsers(
         continue;
       }
       users.insert(unit);
-      result.hasUnscheduled |= !boundary.isScheduled(unit);
+      result.hasUnscheduled =
+          result.hasUnscheduled || !boundary.isScheduled(unit);
     }
   }
   result.count = users.size();
@@ -420,7 +432,7 @@ static LogicalResult collectPressureClosureBundles(
     const VPTOSchedBoundary &boundary, const VPTOSchedModel &model,
     const VPTOSchedDAG &dag, unsigned pressureSet,
     VPTOSchedulingBudget &budget,
-    SmallVectorImpl<SmallVector<Value, 2>> &bundles) {
+    SmallVectorImpl<SmallVector<Value>> &bundles) {
   constexpr unsigned kMaxClosureTargetBundles = 1;
   constexpr unsigned kMaxClosureDirectUsers = 8;
   VPTOPressureSetID pressureSetID = model.getPressureSets()[pressureSet].id;
@@ -438,7 +450,7 @@ static LogicalResult collectPressureClosureBundles(
     if (!valueContributesToPressureSet(model, value, pressureSetID)) {
       continue;
     }
-    SmallVector<Value, 2> bundle = buildPressureBundle(
+    SmallVector<Value> bundle = buildPressureBundle(
         value, pressureSetID, tracker, model, dag, checkedDefinitions);
     if (bundle.empty()) {
       continue;
@@ -477,7 +489,7 @@ static bool isBetterClosureGroup(const PressureClosureGroup &candidate,
 }
 
 struct PressureClosureSimulation {
-  SmallVector<VPTOSUnit *, 8> ready;
+  SmallVector<VPTOSUnit *> ready;
   DenseMap<VPTOSUnit *, unsigned> remaining;
   DenseSet<VPTOSUnit *> discovered;
   DenseSet<VPTOSUnit *> expanded;
@@ -531,7 +543,7 @@ static LogicalResult enqueueClosurePredecessors(
 static FailureOr<bool> discoverClosureUnit(
     VPTOSUnit &root, bool isCore, const VPTOSchedBoundary &boundary,
     VPTOSchedulingBudget &budget, PressureClosureSimulation &simulation) {
-  SmallVector<std::pair<VPTOSUnit *, bool>, 8> worklist{{&root, isCore}};
+  SmallVector<std::pair<VPTOSUnit *, bool>> worklist{{&root, isCore}};
   while (!worklist.empty()) {
     if (!budget.consume()) {
       return failure();
@@ -602,7 +614,8 @@ static FailureOr<int64_t> getLiveSupportPressure(
         }
         int64_t updated = 0;
         if (llvm::AddOverflow(
-                pressure, static_cast<int64_t>(contribution.units), updated)) {
+                pressure, static_cast<int64_t>(contribution.units), updated) !=
+            0) {
           return failure();
         }
         pressure = updated;
@@ -661,9 +674,10 @@ static VPTOSUnit *
 selectClosureReadyUnit(ArrayRef<VPTOSUnit *> ready,
                        const VPTORegPressureTracker &tracker,
                        ArrayRef<VPTORegPressureSet> pressureSets) {
-  return *llvm::min_element(ready, [&](VPTOSUnit *lhs, VPTOSUnit *rhs) {
-    return isBetterLookaheadUnit(lhs, rhs, tracker, pressureSets);
-  });
+  return *llvm::min_element(
+      ready, [&tracker, pressureSets](VPTOSUnit *lhs, VPTOSUnit *rhs) {
+        return isBetterLookaheadUnit(lhs, rhs, tracker, pressureSets);
+      });
 }
 
 static LogicalResult commitClosureUnit(VPTOSUnit &unit,
@@ -693,7 +707,7 @@ static FailureOr<bool> closureMeetsTarget(
     const VPTORegPressureTracker &tracker, const VPTOSchedModel &model,
     VPTOSchedulingBudget &budget, PressureClosureGroup &group) {
   bool targetsAreDead = llvm::all_of(
-      targetValues, [&](Value value) { return !tracker.isLive(value); });
+      targetValues, [&tracker](Value value) { return !tracker.isLive(value); });
   bool avoidsNewExcess = group.peak[pressureSet] <= std::max(start, limit);
   if (!targetsAreDead || !avoidsNewExcess) {
     return false;
@@ -822,7 +836,7 @@ refreshPressureClosureGroup(PressureClosureGroup &closureGroup,
     return success();
   }
 
-  SmallVector<SmallVector<Value, 2>, 2> bundles;
+  SmallVector<SmallVector<Value>> bundles;
   LogicalResult collected = collectPressureClosureBundles(
       boundary, model, dag, *pressureSet, budget, bundles);
   if (failed(collected)) {
@@ -897,7 +911,7 @@ static FailureOr<bool> extendRecoveryTargets(
     const PressureClosureGroup &closureGroup, const VPTOSchedBoundary &boundary,
     const VPTOSchedModel &model, const VPTOSchedDAG &dag,
     VPTOSchedulingBudget &budget, PressureClosureGroup &extendedGroup) {
-  SmallVector<Value, 4> targets(closureGroup.targetValues.begin(),
+  SmallVector<Value> targets(closureGroup.targetValues.begin(),
                                 closureGroup.targetValues.end());
   VPTOPressureSetID pressureSetID =
       model.getPressureSets()[*closureGroup.pressureSet].id;
@@ -986,7 +1000,8 @@ static bool increasesPressureRisk(const VPTOSchedModel &model,
       return true;
     }
     int64_t limit = static_cast<int64_t>(*pressureSet.limit);
-    bool critical = currentPressure[index] * 2 >= limit;
+    bool critical =
+        currentPressure[index] * kCriticalPressureMultiplier >= limit;
     if (critical &&
         candidate.pressure.projected[index] > currentPressure[index])
       return true;
@@ -1229,7 +1244,7 @@ prepareCandidates(VPTOSchedBoundary &boundary,
       return mlir::failure();
     }
     advancedForPressure = *advanced;
-    pressureDrivenIdle |= advancedForPressure;
+    pressureDrivenIdle = pressureDrivenIdle || advancedForPressure;
     if (!advancedForPressure) {
       return candidates;
     }
@@ -1239,7 +1254,7 @@ prepareCandidates(VPTOSchedBoundary &boundary,
 
 static const VPTOSchedCandidate *
 findCandidate(ArrayRef<VPTOSchedCandidate> candidates, const VPTOSUnit *unit) {
-  auto position = llvm::find_if(candidates, [&](const auto &candidate) {
+  auto position = llvm::find_if(candidates, [unit](const auto &candidate) {
     return candidate.unit == unit;
   });
   return position == candidates.end() ? nullptr : &*position;
@@ -1248,7 +1263,7 @@ findCandidate(ArrayRef<VPTOSchedCandidate> candidates, const VPTOSUnit *unit) {
 static FailureOr<bool> preserveOrDelayZeroRelief(
     VPTOSchedDecision &decision, const VPTOScheduleContext &context,
     const VPTOSchedCandidate &selected,
-    const VPTOSchedCandidate *witnessCandidate, VPTOSUnit &witness,
+    const VPTOSchedCandidate *witnessCandidate,
     PressureClosureGroup &closureGroup, VPTOSchedBoundary &boundary,
     const VPTOSchedModel &model, const VPTOSchedDAG &dag,
     VPTOSchedulingBudget &budget, VPTOScheduleFailure &failure) {
@@ -1268,7 +1283,7 @@ static FailureOr<bool> preserveOrDelayZeroRelief(
     }
   }
   if (witnessCandidate) {
-    decision = {&witness, context.direction, context.issueCycle,
+    decision = {witnessCandidate->unit, context.direction, context.issueCycle,
                 "zero-closure-recovery"};
     return false;
   }
@@ -1315,7 +1330,7 @@ static FailureOr<bool> adjustZeroReliefDecision(
   const VPTOSchedCandidate *witnessCandidate =
       findCandidate(candidates, witness);
   return preserveOrDelayZeroRelief(decision, context, *selected,
-                                   witnessCandidate, *witness, closureGroup,
+                                   witnessCandidate, closureGroup,
                                    boundary, model, dag, budget, failure);
 }
 
@@ -1518,7 +1533,7 @@ LogicalResult ScheduleRunner::commitDecision(
                "strategy returned an invalid scheduling decision");
     return mlir::failure();
   }
-  SmallVector<int64_t, 2> pressureBeforeCommit;
+  SmallVector<int64_t> pressureBeforeCommit;
   if (collectDiagnostics) {
     pressureBeforeCommit.assign(context.currentPressure.begin(),
                                 context.currentPressure.end());
@@ -1613,7 +1628,7 @@ static LogicalResult buildSchedulePositions(
       setWorkBudgetFailure(failure, budget);
       return mlir::failure();
     }
-    if (!positions.count(unit.get())) {
+    if (positions.count(unit.get()) == 0) {
       setFailure(failure, VPTOScheduleFailureKind::SemanticVerification,
                  "schedule omits a region node");
       return mlir::failure();

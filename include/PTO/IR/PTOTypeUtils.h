@@ -36,6 +36,17 @@ inline LogicalResult getPTOMemRefStridesAndOffset(
   return detail::getPTOMemRefStridesAndOffsetImpl(memTy, strides, offset, 0);
 }
 
+inline bool isSemanticSignCompatible(IntegerType semanticInt,
+                                     IntegerType scalarInt) {
+  if (semanticInt.isSigned()) {
+    return scalarInt.isSigned() || scalarInt.isSignless();
+  }
+  if (semanticInt.isUnsigned()) {
+    return scalarInt.isUnsigned() || scalarInt.isSignless();
+  }
+  return scalarInt.isSignless();
+}
+
 bool isPTOFloat8Type(Type t);
 bool isPTOFloat8E4M3LikeType(Type t);
 bool isPTOFloat8E5M2LikeType(Type t);
@@ -46,10 +57,17 @@ bool isPTOBF16x2Type(Type t);
 bool isPTOFloat4PackedType(Type t);
 bool isPTOPackedLdgStgVectorType(Type t);
 bool isPTOLowPrecisionType(Type t);
+bool isSupportedPTOPointerElementType(Type t);
 
 unsigned getPTOStorageElemBitWidth(Type t);
 unsigned getPTOStorageElemByteSize(Type t);
 unsigned getPTOPackedLdgStgTotalBits(Type t);
+
+// The conv tile minor-dim size c0 = 32 / elemBytes, by lookup rather than
+// division: G.EXP.22-CPP flags any division whose divisor comes from a
+// function call, guard or not. Returns nullopt for storage widths the
+// runtime cannot hold.
+std::optional<int64_t> convC0ForElemBytes(int64_t elemBytes);
 
 } // namespace mlir::pto
 

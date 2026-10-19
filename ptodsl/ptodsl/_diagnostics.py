@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,17 +6,29 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Shared user-facing diagnostics for PTODSL tracing misuse."""
 
 from __future__ import annotations
 
 import warnings
 from functools import wraps
-from typing import Callable, ParamSpec, TypeVar
+from typing import Callable, TypeVar
+
+try:  # ParamSpec entered the stdlib ``typing`` in Python 3.10.
+    from typing import ParamSpec
+except ImportError:  # Python 3.8 / 3.9
+    try:
+        from typing_extensions import ParamSpec
+    except ImportError:
+        ParamSpec = None
 
 
-P = ParamSpec("P")
 R = TypeVar("R")
+# Annotations in this module are lazy strings (see ``from __future__`` above),
+# so ``P`` only needs to exist as a name; on interpreters without ParamSpec a
+# plain TypeVar keeps the annotation references resolvable enough for tooling.
+P = ParamSpec("P") if ParamSpec is not None else TypeVar("P")
 
 
 class PTODSLDeprecationWarning(UserWarning):
@@ -412,6 +425,16 @@ def subkernel_kernel_kind_mismatch_error(role: str, kernel_kind: str) -> Runtime
     )
 
 
+def init_core_physical_section_required_error() -> RuntimeError:
+    """Return a diagnostic for an unscoped init_core call in a mixed kernel."""
+    return RuntimeError(
+        "pto.init_core() cannot be called outside pto.section(...) when the "
+        "kernel uses explicit physical sections. Call pto.init_core() once "
+        "inside each physical section so PTODSL can select the matching Cube "
+        "or Vector initialization."
+    )
+
+
 def inline_subkernel_value_escape_error(role: str, type_text: str) -> RuntimeError:
     """Return one diagnostic for outlined inline-scope values escaping their helper boundary."""
     return RuntimeError(
@@ -602,6 +625,7 @@ __all__ = [
     "jit_missing_annotation_error",
     "jit_non_gm_ptr_entry_error",
     "inline_subkernel_value_escape_error",
+    "init_core_physical_section_required_error",
     "physical_section_value_escape_error",
     "make_tensor_view_missing_metadata_error",
     "illegal_inline_subkernel_placement_error",

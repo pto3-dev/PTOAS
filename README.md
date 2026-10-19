@@ -145,6 +145,13 @@ PTO_BUILD_DIR="$PTO_SOURCE_DIR/build" \
 
 安装完成后，必须先按第 4 节配置运行环境，再执行 `ptoas` 或 `check-pto`。
 
+GitCode/CANN 构建入口 `bash build.sh --build` 保留 `build/`，由 Ninja
+增量更新受影响的目标。`bash build.sh --pkg` 使用独立的 `build/wheel/`
+构建 wheel，再由 `build/package/` 封装安装包，不重复编译 PTOAS。
+需要清理 PTOAS 中间产物（例如切换工具链）时，使用 `--clean --build`
+或 `--clean --pkg`；此选项不清理共享 LLVM 缓存。跨 CI 任务的编译结果
+复用由 `BuildAccelerate`/xcache 提供，工作区内的增量构建需要保留对应目录。
+
 ### 3.4 Python 安装合同 (Python Distribution Contract)
 
 如果你要使用 Python 绑定、PTODSL资源，推荐使用仓库根目录
@@ -170,7 +177,7 @@ cd $PTO_SOURCE_DIR
 
 ```python
 import ptodsl
-from ptodsl import pto, scalar
+from ptodsl import pto
 from ptoas.mlir.dialects import pto as mlir_pto
 ```
 
@@ -196,7 +203,9 @@ from ptoas.mlir.dialects import pto as mlir_pto
 >   `PTOAS_ENABLE_ONLINE_CORE_COMPILE=ON` 构建（`build.sh` 默认开启，并以 shared
 >   方式产出 `libLLVMSupport`），且目标机上有系统级 `cmake`、`python3-dev` 头与
 >   合适版本的 `pybind11`。具体版本约束：
->   - **Python**：在线编译驱动要求解释器 **>= 3.9**（更低版本会直接报错）。
+>   - **Python**：在线编译驱动要求解释器 **>= 3.8**（更低版本会直接报错）。3.8 上
+>     随包运行时已消除 3.9-only API 依赖（`str.removesuffix` 等）；`ast.unparse`
+>     缺失时错误信息会降级但不影响编译。
 >   - **pybind11（`ptoas._core`）**：**>= 2.13.6**，不限上界，任意 3.x 均可。
 >   - **pybind11（`ptoas.mlir` 家族）**：`2.13.6 <= pybind11 < 3.0.2`。自 3.0.2 起
 >     `def_property` 系列禁用 `keep_alive`，上游 MLIR 绑定因此无法编译；家族因而
@@ -310,9 +319,17 @@ ptoas test/lit/vmi_new/vmi_ptoas_cli_pipeline.pto --pto-arch=a5 --pto-backend=vp
 ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
   --vpto-scheduler=analyze -o output.cpp
 
-# off（默认）完全禁用；on 执行相同分析，不重排 IR
+# A5 默认启用 on；显式 off 禁用，on 会检查并应用合法的新顺序
 ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
   --vpto-scheduler=on -o output.cpp
+
+# 显式启用“调度 → 有界重物化 → 再调度”，并输出决策信息
+ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
+  --vpto-scheduler=on --vpto-scheduler-remat --vpto-scheduler-trace -o output.cpp
+
+# A5 默认随 scheduler=on 启用重物化；需要时可显式关闭
+ptoas input.pto --pto-arch=a5 --pto-backend=vpto --emit-vpto \
+  --vpto-scheduler-remat=false -o output.cpp
 
 # 查看当前 ptoas release 版本号
 ptoas --version
@@ -326,6 +343,10 @@ ptoas --version
 目标资源占用和寄存器压力；生成代码仍写入正常输出。设计与分析格式详见
 [`docs/designs/vpto-scheduler-framework.md`](docs/designs/vpto-scheduler-framework.md)。
 
+`--vpto-scheduler-remat` 是 A5 VPTO Vector 优化，必须使用 `--pto-backend=vpto`，且只能与 `--vpto-scheduler=on` 配合。A5 driver 在用户没有显式指定时会随默认的 scheduler `on` 一起启用；可通过 `--vpto-scheduler-remat=false` 单独关闭。它会在首次调度后分析静态压力，但仅在某个调度区间的 vector 峰值严格超过模型上限 32 时，从循环携带值递归构造由目标模型认可的 cheap producer DAG，在前驱深度和代码膨胀预算内于消费点附近重建计算，再重新分析并调度一次；predicate 峰值超过模型上限 7 不会单独触发 vector remat。Planner 会把预算内的候选交给二次调度，即使估算尚未完全达到降压目标；第二次调度失败、没有降低静态 vector 峰值或任一有上限的寄存器压力集最终仍超限时，会回滚全部克隆、use 替换和首次调度顺序。
+
+`--vmi-fastmath` 默认开启。部分 `f32` 到 `bf16` 的 `Z` 舍入且不饱和快速转换可能改变 NaN 结果（例如 `0x7F800001` 可被截断为正无穷 `0x7F80`）；需要保留这类 NaN 转换结果时，可显式传入 `--vmi-fastmath=false`。详见[编译选项说明](docs/zh/tileop/user_guide/compile_options.md)。
+
 ### 5.2 Python 接口 (Python API)
 
 在支持的 `ptoas` 安装环境中，PTO Dialect 与 PTODSL 都可以直接导入。
@@ -334,13 +355,13 @@ ptoas --version
 from ptoas.mlir.ir import Context, Module, Location
 # PTOAS 自带的 MLIR Python API 位于 ptoas.mlir 命名空间。
 from ptoas.mlir.dialects import pto
-from ptodsl import pto as jit_pto, scalar
+from ptodsl import pto as jit_pto
 
 with Context() as ctx, Location.unknown():
     pto.register_dialect(ctx, load=True)
     module = Module.create()
     print("PTO Dialect registered successfully!")
-    print("PTODSL imported successfully!", jit_pto, scalar)
+    print("PTODSL imported successfully!", jit_pto)
 
 ```
 
@@ -432,16 +453,18 @@ Unsupported types, layouts, operations, transfer modes and event ID 7 fail
 compilation. Dynamic valid shapes, BF16, atomics, matrix operations, cross-core
 synchronization and persistent execution need separate backend features.
 
-Both memory planners use the A1 conservative budgets: UB 128 KiB, L1 512 KiB,
+The current memory planner uses the A1 conservative budgets: UB 128 KiB, L1 512 KiB,
 L0A/L0B 64 KiB and L0C 256 KiB. Non-vector spaces remain unavailable to this
 first instruction profile. Event IDs 0–6 are compiler-owned; ID 7 is reserved
 for ISA helpers. Local set/wait synchronization runs by default on A1.
+The unified synchronization allocator remains unsupported on A1; use the
+validated local set/wait path or conservative barrier-all mode.
 `--enable-inject-barrier-all-sync` selects the conservative alternative;
 explicitly disabling all automatic synchronization is rejected.
 
 ```bash
 # Requires the A1 vector implementation from the matching pto-isa branch.
-ptoas --pto-arch=a1 --plan-memory-impl=modern \
+ptoas --pto-arch=a1 \
   test/lit/a1/fp16_vector.pto -o a1_vector_add.cpp
 # Compile with CANN's 310P compiler and the matching ISA checkout.
 # Set PTO_ISA_ROOT and CANN_ROOT to your ISA checkout and installed CANN SDK.

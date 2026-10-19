@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,17 +6,17 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Builtin MLIR vector helpers for PTODSL scalar-contiguous access."""
 
 from collections.abc import Mapping
 
+from ptoas.mlir.dialects import llvm
+from ptoas.mlir.ir import IntegerAttr, IntegerType, Operation, VectorType
+
 from ._scalar_coercion import coerce_scalar_to_type
 from ._surface_values import _SurfaceValue, VecValue, unwrap_surface_value
 from ._types import _resolve, _signless_integer_type, _validate_vec_size, vec_type
-
-from ptoas.mlir.dialects import arith
-from ptoas.mlir.dialects import llvm
-from ptoas.mlir.ir import IntegerType, VectorType
 
 
 def Vec(dtype, size: int, *, init=None):
@@ -82,7 +83,11 @@ def _per_element_vec_value(descriptor, values):
             element_type,
             context=f"pto.Vec(..., init=sequence) element {index}",
         )
-        element_index = arith.ConstantOp(i32, index).result
+        element_index = Operation.create(
+            "pto.constant",
+            results=[i32],
+            attributes={"value": IntegerAttr.get(i32, index)},
+        ).results[0]
         current = llvm.InsertElementOp(current, scalar_value, element_index).res
     return VecValue(current)
 
@@ -128,12 +133,46 @@ def _broadcast_vec_value(descriptor, init):
             raise TypeError(f"pto.Vec(..., init=vector) expected {vector_type}, got {vec_value.type}")
         return vec_value
 
+    if not hasattr(raw_init, "type"):
+        return VecValue(
+            coerce_scalar_to_type(
+                init, vector_type, context="pto.Vec(..., init=...)"
+            )
+        )
+
     scalar_value = coerce_scalar_to_type(init, element_type, context="pto.Vec(..., init=...)")
-    current = llvm.UndefOp(vector_type).res
+    carrier_vector_type = vector_type
+    carrier_element_type = element_type
+    if IntegerType.isinstance(element_type):
+        int_type = IntegerType(element_type)
+        if not int_type.is_signless:
+            carrier_element_type = IntegerType.get_signless(int_type.width)
+            source_vector_type = VectorType(vector_type)
+            carrier_vector_type = VectorType.get(
+                list(source_vector_type.shape),
+                carrier_element_type,
+                scalable=list(source_vector_type.scalable_dims),
+            )
+            scalar_value = Operation.create(
+                "builtin.unrealized_conversion_cast",
+                results=[carrier_element_type],
+                operands=[scalar_value],
+            ).results[0]
+
+    current = llvm.UndefOp(carrier_vector_type).res
     i32 = IntegerType.get_signless(32)
     for index in range(descriptor.size):
-        element_index = arith.ConstantOp(i32, index).result
+        element_index = Operation.create(
+            "pto.constant", results=[i32],
+            attributes={"value": IntegerAttr.get(i32, index)},
+        ).results[0]
         current = llvm.InsertElementOp(current, scalar_value, element_index).res
+    if carrier_vector_type != vector_type:
+        current = Operation.create(
+            "builtin.unrealized_conversion_cast",
+            results=[vector_type],
+            operands=[current],
+        ).results[0]
     return VecValue(current)
 
 

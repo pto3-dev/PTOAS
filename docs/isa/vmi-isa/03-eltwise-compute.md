@@ -20,7 +20,7 @@
 
   ```c
   for (int i = 0; i < N; i++)
-      dst[i] = mask[i] ? lhs[i] + rhs[i] : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? lhs[i] + rhs[i] : 0;
   ```
 
 - **syntax:**
@@ -45,7 +45,7 @@
 
   | Attribute | Values | Default | Description |
   |---|---|---|---|
-  | `pmode` | `"zero"`, `"merge"` | `"zero"` | Inactive-lane behavior |
+  | `pmode` | `"zero"` | `"zero"` | Inactive-lane behavior |
 
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
 - **lowering to `pto.mi`:**
@@ -72,14 +72,14 @@
       -> !pto.vmi.vreg<128×f32>
   // → pto.as: 2 × pto.vadd (EVEN/ODD), each with create_mask all-active mask
 
-  // Masked add with merge mode
-  %s = pto.vmi.vadd %a, %b, %mask {pmode = "merge"}
+  // Masked add
+  %s = pto.vmi.vadd %a, %b, %mask {pmode = "zero"}
       : !pto.vmi.vreg<64×f32>, !pto.vmi.vreg<64×f32>, !pto.vmi.mask<64> -> !pto.vmi.vreg<64×f32>
   ```
 
-### `pto.vmi.vaddc` / `pto.vmi.vaddcs`
+### `pto.vmi.vaddc` / `pto.vmi.vsubc` / `pto.vmi.vaddcs` / `pto.vmi.vsubcs`
 
-Carry-chain integer adds are exposed as multi-result VMI operations so the
+Carry-chain integer arithmetic is exposed as multi-result VMI operations so the
 frontend can preserve the hardware carry instruction instead of expanding the
 operation into an add/compare/select sequence.
 
@@ -87,15 +87,24 @@ operation into an add/compare/select sequence.
 %sum, %carry = pto.vmi.vaddc %lhs, %rhs, %mask
     : !pto.vmi.vreg<Lxui32>, !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>
     -> !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>
+%difference, %borrow_free = pto.vmi.vsubc %lhs, %rhs, %mask
+    : !pto.vmi.vreg<Lxui32>, !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>
+    -> !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>
 %next, %carry2 = pto.vmi.vaddcs %lhs, %rhs, %carry, %mask
+    : !pto.vmi.vreg<Lxui32>, !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>, !pto.vmi.mask<L>
+    -> !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>
+%difference2, %borrow_free2 = pto.vmi.vsubcs %lhs, %rhs, %carry, %mask
     : !pto.vmi.vreg<Lxui32>, !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>, !pto.vmi.mask<L>
     -> !pto.vmi.vreg<Lxui32>, !pto.vmi.mask<L>
 ```
 
-Both operations require matching 32-bit integer data values. The execution
-mask, carry-in (for `vaddcs`), and carry-out use the same logical lane count,
-layout, and `b32` physical mask granularity as the data ports. They lower
-one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
+These operations require matching 32-bit integer data values. The execution
+mask, carry-in (for `vaddcs`/`vsubcs`), and carry-out use the same logical lane
+count and layout as the data ports, and all physical mask parts must use `b32`
+granularity. They lower one-to-N to the corresponding VPTO carry operation.
+For subtraction, the carry predicate is **not-borrow**: the comparison is
+unsigned, `carry[i] = 1` means no borrow occurred, and `carry[i] = 0` means a
+borrow occurred. In `vsubcs`, a carry-in of 0 propagates a borrow.
 
 ### `pto.vmi.vdiv`
 
@@ -103,7 +112,7 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? lhs[i] / rhs[i] : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? lhs[i] / rhs[i] : 0;
   ```
 
 - **syntax:**
@@ -123,7 +132,7 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? max(lhs[i], rhs[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? max(lhs[i], rhs[i]) : 0;
   ```
 
 - **syntax:**
@@ -148,7 +157,7 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? abs(src[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? abs(src[i]) : 0;
   ```
 
 - **syntax:**
@@ -170,7 +179,7 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? -src[i] : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? -src[i] : 0;
   ```
 
 - **syntax:**
@@ -190,7 +199,7 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? max(0, src[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? max(0, src[i]) : 0;
   ```
 
 - **syntax:**
@@ -210,11 +219,11 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? exp(src[i]) : (pmode_merge ? dst_old[i] : 0);   // vexp
+      dst[i] = mask[i] ? exp(src[i]) : 0;   // vexp
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? ln(src[i])  : (pmode_merge ? dst_old[i] : 0);   // vln
+      dst[i] = mask[i] ? ln(src[i])  : 0;   // vln
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? sqrt(src[i]) : (pmode_merge ? dst_old[i] : 0);  // vsqrt
+      dst[i] = mask[i] ? sqrt(src[i]) : 0;  // vsqrt
   ```
 
 - **syntax:**
@@ -243,7 +252,7 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (lhs[i] & rhs[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? (lhs[i] & rhs[i]) : 0;
   ```
 
 - **syntax:**
@@ -256,11 +265,18 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
   %r = pto.vmi.vxor %lhs, %rhs : !pto.vmi.mask<L>, !pto.vmi.mask<L> -> !pto.vmi.mask<L>
   ```
 - **datatypes:** `i8`–`i32` (integer bitwise); `pred` (per-lane boolean op)
+- **interface split:** the two forms are lowered through two separate
+  interfaces. vreg operands become the vreg-interface ops
+  `pto.vmi.andi` / `pto.vmi.ori` / `pto.vmi.xori`, which are vreg-only and keep
+  the governing `mask`; mask operands become `pto.vmi.mask_and` /
+  `pto.vmi.mask_or` / `pto.vmi.mask_xor`. `pto.as` performs this split in
+  `vmi-lower-unified-to-legacy`.
 - **lowering to `pto.mi`:**
   ```
   K × pto.vand / pto.vor / pto.vxor
   ```
-  `#mi = K`, `dep = 1`.
+  `#mi = K`, `dep = 1`. The governing `mask` of the vreg form becomes the
+  predication operand of each part.
 
 ### `pto.vmi.vnot`
 
@@ -272,7 +288,7 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? ~src[i] : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? ~src[i] : 0;
   ```
 
 - **syntax:**
@@ -284,11 +300,15 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
   %r = pto.vmi.vnot %src : !pto.vmi.mask<L> -> !pto.vmi.mask<L>
   ```
 - **datatypes:** `i8`–`i32`; `pred` (predicate complement)
+- **interface split:** the vreg form becomes `pto.vmi.not` (vreg-only, keeps the
+  governing `mask`), the mask form becomes `pto.vmi.mask_not`; `pto.as`
+  performs this split in `vmi-lower-unified-to-legacy`.
 - **lowering to `pto.mi`:**
   ```
   K × pto.vnot
   ```
-  `#mi = K`, `dep = 1`.
+  `#mi = K`, `dep = 1`. The governing `mask` of the vreg form becomes the
+  predication operand of each part.
 
 
 ---
@@ -297,20 +317,20 @@ one-to-N to `pto.vaddc` and `pto.vaddcs` respectively.
 
 ### `pto.vmi.vshl` / `pto.vmi.vshr`
 
-- **semantics:** Elementwise left shift (`vshl`) or unsigned right shift (`vshr`). The shift count is per-lane from `rhs`.
+- **semantics:** Elementwise left shift (`vshl`) or right shift (`vshr`). The shift count is per-lane from `rhs`. For `vshr`, signed elements use arithmetic right shift, while unsigned and signless elements use logical right shift.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (lhs[i] << rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshl
+      dst[i] = mask[i] ? (lhs[i] << rhs[i]) : 0;  // vshl
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (lhs[i] >> rhs[i]) : (pmode_merge ? dst_old[i] : 0);  // vshr (unsigned)
+      dst[i] = mask[i] ? (lhs[i] >> rhs[i]) : 0;  // vshr (signed: arithmetic; unsigned: logical)
   ```
 
 - **syntax:**
   ```mlir
   %r = pto.vmi.vshl %lhs, %rhs, %mask : !pto.vmi.vreg<L×T>, !pto.vmi.vreg<L×T>, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
   ```
-- **datatypes:** `i8`–`i32`
+- **datatypes:** `si8`/`si16`/`si32` and `ui8`/`ui16`/`ui32`
 - **lowering to `pto.mi`:**
   ```
   K × pto.vshl / pto.vshr
@@ -331,12 +351,12 @@ scalar type must match the vector element type.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? src[i] + scalar : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? src[i] + scalar : 0;
   ```
 
 - **syntax:**
   ```mlir
-  %r = pto.vmi.vadds %src, %scalar, %mask {pmode = "merge"} : !pto.vmi.vreg<L×T>, T, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
+  %r = pto.vmi.vadds %src, %scalar, %mask {pmode = "zero"} : !pto.vmi.vreg<L×T>, T, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
   ```
 - **operands:**
 
@@ -383,19 +403,19 @@ scalar type must match the vector element type.
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (src[i] << scalar) : (pmode_merge ? dst_old[i] : 0);  // vshls
+      dst[i] = mask[i] ? (src[i] << scalar) : 0;  // vshls
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (src[i] >> scalar) : (pmode_merge ? dst_old[i] : 0);  // vshrs
+      dst[i] = mask[i] ? (src[i] >> scalar) : 0;  // vshrs
   ```
 
 - **syntax:**
   ```mlir
   %r = pto.vmi.vshls %src, %shift, %mask : !pto.vmi.vreg<L×T>, i16, !pto.vmi.mask<L> -> !pto.vmi.vreg<L×T>
   ```
-- **datatypes:** `T` is an integer type from 8 to 32 bits. The uniform shift
-  amount is a signless `i16` value independent of `T` and should be in the
-  range `[0, bitwidth(T))`. For `vshrs`, the signedness of `T` determines
-  whether the right shift is arithmetic or logical.
+- **datatypes:** `si8`/`si16`/`si32` and `ui8`/`ui16`/`ui32`. The uniform shift
+  amount is a `ui16` value independent of `T` and should be in the
+  range `[0, bitwidth(T))`. For `vshrs`, signed elements use arithmetic right
+  shift, while unsigned and signless elements use logical right shift.
 - **lowering to `pto.mi`:**
   ```
   K × pto.vshls / pto.vshrs
@@ -442,7 +462,7 @@ scalar type must match the vector element type.
   |---|---|---|---|
   | `cmp` | `eq`, `ne`, `lt`, `le`, `gt`, `ge` | *(required)* | Comparison mode (fp unordered / integer; integer signedness comes from the element type: `siN` vs `iN`/`uiN`) |
   | | `oeq`, `one`, `olt`, `ole`, `ogt`, `oge` | | FP ordered forms |
-  | `pmode` | `"zero"`, `"merge"` | `"zero"` | Inactive-lane behavior |
+  | `pmode` | `"zero"` | `"zero"` | Inactive-lane behavior |
 
 - **datatypes:** `i8`/`si8`/`ui8` – `i32`/`si32`/`ui32`, `f16`, `bf16`, `f32`.
   Integer signedness is taken from the element type; signless `iN` is treated
@@ -556,9 +576,20 @@ scalar type must match the vector element type.
 
   | Attribute | Values | Default | Description |
   |---|---|---|---|
-  | `pmode` | `"zero"`, `"merge"` | `"zero"` | Result handling when selector inactive: `"merge"` retains `false_value` lanes |
+  | `pmode` | `"zero"` | `"zero"` | Inactive-lane behavior: inactive lanes write 0 |
 
 - **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
+- **mask granularity:** A surface `pred` mask is accepted. The
+  `vmi-mask-granularity-assignment` pass requests `b8`, `b16`, or `b32` at
+  each `vsel` use according to the result element width, just as for legacy
+  `select`; prior normalization to `select` is not required. If the shared
+  mask has a different primary granularity, the pass rematerializes a cheap
+  mask producer or inserts `pto.vmi.ensure_mask_granularity` at that use.
+  A mask root without a concrete granularity constraint or preference defaults
+  to `b32`. The per-use request is therefore required for 8/16-bit `vsel`:
+  without it, the rewritten mask can fail the data-width verifier. This direct
+  support does not imply coverage of every VMI mask consumer; see the
+  [assignment boundaries](00-architecture-overview.md#mask-granularity-assignment-boundaries).
 - **lowering to `pto.mi`:**
   ```
   K × pto.vsel
@@ -628,10 +659,9 @@ scalar type must match the vector element type.
 
 ---
 
-## 3.7 Carry / Borrow Ops (Not Provided)
+## 3.7 Borrow Ops (Not Provided)
 
-Vector carry/borrow arithmetic (e.g. multi-word add-with-carry across
-lanes) is **not provided** on the current surface. It will be added directly
+borrow arithmetic  is **not provided** on the current surface. It will be added directly
 as `i64` element-wise ops once the `i64` support plan is finalized and the
 hardware path is confirmed. Until then, widening to `i64` scalar emulation
 or fusing at the `pto.mi` layer is the workaround.

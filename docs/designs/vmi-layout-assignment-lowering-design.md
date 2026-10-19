@@ -101,9 +101,9 @@ dense cast:
   f32 shared by f8 store and S=32 reduce
 
 group reduce:
-  32-bit accumulator: S=8, S=16, S=32, S=64
-  16-bit accumulator: S=16, S=32, S=64, S=128
-  8-bit storage reduces only through an explicit accumulator cast
+  32-bit input: S=8, S=16, S=32, S=64
+  16-bit input: S=16, S=32, S=64, S=128
+  direct 8-bit inputs are rejected; explicitly extend to i16/i32 before reducing
   reduce -> group_store
   reduce -> group_slot_load/elemwise -> group_store
   reduce -> group_broadcast -> elemwise -> reduce -> store
@@ -118,7 +118,7 @@ layout conflict:
   one scalar group-slot source expressed as explicit slots=8 and slots=1 producers
   S=16 element-deinterleaved/block-deinterleaved layout selection
   dense consumer of group_slots diagnostic
-  packed group-slot width-changing cast diagnostic
+  packed group-slot width-changing cast with a registered layout relation
   S=64 slots=1 group-slot width-changing cast
 
 control flow:
@@ -164,8 +164,9 @@ physical dense layout:
   contiguous, deinterleaved=2/4, block_deinterleaved=2/4
 
 group-slot result layout:
-  group_slots(G, slots=8) for packed VCG results
-  group_slots(G, slots=1) for row-local S=64 results
+  group_slots(G, slots=8, lane_stride=R) for native VCG results
+  R=2 for 16-bit integer add; R=1 for floating-point add, max/min, and 32-bit add
+  group_slots(G, slots=1) for row-local full-register-multiple groups
 
 producer-driven layout:
   load, group_load, group_slot_load, broadcast, create_mask,
@@ -211,7 +212,7 @@ private vector function runtime:
   still lowers only from assigned layouts and helper ops.
 
 diagnostic-only cases:
-  compact S=12 gather fallback, packed slots=8 width-changing cast, public VMI
+  compact S=12 gather fallback, unregistered packed cast relations, public VMI
   ABI, unsafe masked_load tail, and unaligned/dynamic group memory remain
   explicit capability boundaries.
 ```
@@ -238,9 +239,9 @@ cast boundary:
 
 compute boundary:
   baseline floating compute uses f16/f32.
-  baseline integer grouped reduction compute uses i32 accumulators.  i8/i16
-  storage must be widened first because integer reduction instructions widen
-  narrow inputs.
+  integer grouped reduction supports logical i16/i32 results. Native i16 sums
+  use widened hardware results internally and expose their low halfwords.
+  i8 storage must be explicitly extended to a supported i16/i32 source first.
   f8/i8 are not baseline accumulator/compute element types.
 
 value-indexed accumulation boundary:
@@ -315,8 +316,9 @@ slot_block(g) = g / K
 slot_lane(g)  = (g % K) * LS
 ```
 
-All non-slot lanes are undefined and may only be read by group-aware operations.
-Ordinary dense `add/mul/store/truncf` cannot consume `group_slots`.
+Non-slot lanes have no logical value. Consumers must use the assigned slot map.
+Dense-only consumers require materialization; supported elementwise and cast
+operations can preserve group slots through their registered layout relations.
 
 `LS` defaults to 1 and is measured in logical element-sized physical slots.  It
 is not a new group semantic; it records regular physical spacing for each stored
@@ -329,8 +331,8 @@ element type, matching ordinary dense lane-stride values.
 `K` is selected by the assigned producer/result contract:
 
 ```text
-S=8/16/32 packed VCG result -> slots=8
-S=64 row-local result       -> slots=1
+Native VCG result -> slots=8, with lane_stride selected by kind and input width
+Full-register-multiple row-local result -> slots=1
 ```
 
 Histogram does not add a layout family.  A full logical histogram result uses:
@@ -429,14 +431,15 @@ cast layout fact:
   f32/i32 -> f8/i8  requires deinterleaved=4 source and contiguous result
 
 group_reduce layout fact:
-  define E = sizeof(accumulator T), VLaneElems = 32B / E,
+  define E = sizeof(logical input element T), VLaneElems = 32B / E,
   L = 256B / E, S = N / G.
+  R=2 for native 16-bit integer add; R=1 for the other native VCG reductions.
   S == VLaneElems      requires contiguous source/mask and
-                       group_slots(G, slots=8) result.
+                       group_slots(G, slots=8, lane_stride=R) result.
   S == 2 * VLaneElems  requires deinterleaved=2 source/mask and
-                       group_slots(G, slots=8) result.
+                       group_slots(G, slots=8, lane_stride=R) result.
   S == 4 * VLaneElems  requires deinterleaved=4 source/mask and
-                       group_slots(G, slots=8) result.
+                       group_slots(G, slots=8, lane_stride=R) result.
   S >= L && S % L == 0 requires contiguous source/mask and
                        group_slots(G, slots=1) result.
 
@@ -449,6 +452,11 @@ These helpers return semantic layout requirements and capability diagnostics.
 They do not return VPTO instruction names, cost decisions, clone decisions, or
 multi-user plans.
 
+Source partitioning uses the logical input width, even when the hardware sum
+widens. Native 16-bit integer `vcgadd` uses 32-bit accumulators and exposes the
+logical low halfwords as `gs(8, 2)`, independent of consumers; see the
+[native integer layout contract](a5-vcg-integer-native-layout.md).
+
 The useful shared fact is the part that would otherwise be recomputed by two or
 more stages and must stay identical for correctness:
 
@@ -459,8 +467,8 @@ cast width ratio:
   lowering uses it to check the local op shape before emitting VPTO.
 
 group_reduce lane partition:
-  assignment uses N/G and accumulator element width to request source/mask and
-  result layouts.
+  assignment uses N/G, logical input element width, and reduction kind to
+  request source/mask and result layouts.
   validation uses the same math to reject legacy or incomplete group_slots.
   lowering uses the already assigned layouts to select the local VPTO sequence.
 
@@ -514,7 +522,7 @@ rewriting explicit helper IR:
 ```text
 baseline:
   %x_d2 = pto.vmi.extf %x_f16
-  %a    = pto.vmi.addf %x_d2, %k_d2
+  %a    = pto.vmi.vadd %x_d2, %k_d2
   %a_c  = pto.vmi.ensure_layout %a : deinterleaved=2 -> contiguous
   pto.vmi.store %a_c, %out0
   %x_c  = pto.vmi.ensure_layout %x_d2 : deinterleaved=2 -> contiguous
@@ -585,7 +593,8 @@ two-way interleaved memory ops:
 group_reduce_add{f|i}:
   uses the group_reduce layout fact in section 4.1.
   The source and mask operands request the computed dense layout.
-  The result is assigned group_slots(G, slots=8) or group_slots(G, slots=1).
+  The result is assigned group_slots(G, slots=8, lane_stride=R) or
+  group_slots(G, slots=1), with R determined by reduction kind and input width.
   Floating-point `group_reduce_addf` carries `reassoc`; integer
   `group_reduce_addi` does not.
 
@@ -605,8 +614,8 @@ group_store:
 
 group_slot_cast f32 -> f16:
   slots=1 row-local source/result is legal
-  slots=8 packed source is illegal unless a future explicit helper or semantic
-  op defines the packed slot-preserving transform
+  slots=8 source with lane_stride=1 produces slots=8 with lane_stride=2
+  through the registered slot-preserving cast relation
 ```
 
 ### 5.3 Tail And Memory Safety
@@ -673,17 +682,19 @@ truncf f32 -> f8:
   requests result contiguous f8
 
 group_reduce_add{f|i}:
-  computes E = sizeof(accumulator type), VLaneElems = 32B / E,
+  computes E = sizeof(logical input element), VLaneElems = 32B / E,
   L = 256B / E, and S = logical_lanes / num_groups
-  S=VLaneElems requests source contiguous and result group_slots(G, slots=8)
+  R=2 for native 16-bit integer add; R=1 for floating-point or 32-bit add
+  S=VLaneElems requests source contiguous and result
+  group_slots(G, slots=8, lane_stride=R)
   S=2*VLaneElems requests source deinterleaved=2 and result
-  group_slots(G, slots=8)
+  group_slots(G, slots=8, lane_stride=R)
   S=4*VLaneElems requests source deinterleaved=4 and result
-  group_slots(G, slots=8)
+  group_slots(G, slots=8, lane_stride=R)
   S>=L && S%L==0 requests source contiguous and result
   group_slots(G, slots=1)
-  8-bit storage reaches this request only after an explicit cast to the
-  accumulator type
+  A5 has no native 8-bit reduction. Direct 8-bit sources, including singleton
+  groups, are rejected before layout assignment; there is no implicit widening.
 
 group_broadcast:
   requests source group_slots(num_groups, slots=K)
@@ -695,7 +706,7 @@ group_store:
   requests source group_slots(num_groups, slots=K)
   explicit output stride attrs/operands decide store legality
 
-dense elementwise add/mul/fma/min/max/select:
+dense elementwise add/mul/vmula/min/max/select:
   requests all dense data operands and results use one dense layout
   mask operands request the same data layout and the consumer element
   granularity
@@ -754,9 +765,8 @@ scf.if/scf.for/call/return:
 Important negative requests:
 
 ```text
-ordinary dense add/mul/store/truncf cannot request group_slots
-packed group_slots(slots=8) cannot request width-changing cast unless a packed
-slot-preserving cast transform is explicitly represented
+ordinary dense-only consumers cannot request group_slots without materialization
+packed width-changing casts must match a registered slot-preserving relation
 slots=1 group_store cannot request unit-stride row-major output until a pack or
 unaligned-store transform is explicitly represented
 ```
@@ -836,9 +846,10 @@ public/external VMI function boundary requires a stable ABI or diagnostic
 S=32 fast tail load requires full_footprint_readable or gather fallback
 ```
 
-`slots = 1` row-local cast may satisfy the slot-preserving transform requirement.
-Packed `slots = 8` f32->f16 remains a diagnostic unless a separate packed cast
-or unpack/materialization transform is represented explicitly.
+Both row-local and packed casts can satisfy the slot-preserving transform
+requirement. For example, packed f32->f16 uses `gs(8) -> gs(8, 2)`, while
+native integer 16->32 extension uses `gs(8, 2) -> gs(8)`. Unsupported type/layout
+pairs remain diagnostics.
 
 Equivalence constraints:
 
@@ -1039,8 +1050,8 @@ Examples:
 dense store of group_slots:
   use group_store, group_broadcast, or explicit group-pack
 
-packed group-slot f32->f16:
-  group_broadcast before truncf, or keep group_store as f32
+unregistered packed group-slot cast relation:
+  materialize a supported source layout or use group_broadcast before the cast
 
 S=32 tail without full_footprint_readable:
   mark source full_footprint_readable or enable stable gather fallback

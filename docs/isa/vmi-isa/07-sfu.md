@@ -20,7 +20,7 @@
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? exp(x[i] - max[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? exp(x[i] - max[i]) : 0;
   ```
 
 - **syntax:**
@@ -41,7 +41,7 @@
   |---|---|---|
   | `result` | `!pto.vmi.vreg<L×f32>` | `exp(x − max)` (always `f32`) |
 
-- **attributes:** `pmode` (`"zero"` / `"merge"`), default `"zero"`
+- **attributes:** `pmode` = `"zero"` (default)
 - **datatypes:** `x` and `max`: matching `f16` or `f32`; result: `f32`
 - **lowering to `pto.mi`:**
   ```
@@ -63,7 +63,7 @@
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (alpha * x[i] + acc[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? (alpha * x[i] + acc[i]) : 0;
   ```
 
 - **syntax:**
@@ -99,7 +99,7 @@
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (src[i] > 0 ? src[i] : slope * src[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? (src[i] > 0 ? src[i] : slope * src[i]) : 0;
   ```
 
 - **syntax:**
@@ -128,7 +128,7 @@
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (max(src[i], 0) + alpha[i] * min(src[i], 0)) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? (max(src[i], 0) + alpha[i] * min(src[i], 0)) : 0;
   ```
 
 - **syntax:**
@@ -164,10 +164,8 @@
   for (int i = 0; i < L; i++) {
       // signed variant; use uint64_t for the ui32 form
       int64_t r = (int64_t)lhs[i] * (int64_t)rhs[i];
-      low [i] = mask[i] ? (int32_t)(r & 0xFFFFFFFF)
-                        : (pmode_merge ? low_old [i] : 0);
-      high[i] = mask[i] ? (int32_t)(r >> 32)
-                        : (pmode_merge ? high_old[i] : 0);
+      low [i] = mask[i] ? (int32_t)(r & 0xFFFFFFFF) : 0;
+      high[i] = mask[i] ? (int32_t)(r >> 32) : 0;
   }
   ```
 
@@ -196,7 +194,7 @@
 
   | Attribute | Type | Default | Description |
   |---|---|---|---|
-  | `pmode` | `StrAttr` (`"zero"` \| `"merge"`) | `"zero"` | Predication mode. `"merge"` preserves the previous `low`/`high` lane values on inactive lanes; on A5 this is emulated (see [Appendix C](10-appendices.md)). |
+  | `pmode` | `StrAttr` (`"zero"`) | `"zero"` | Predication mode. Inactive lanes write 0. |
 
 - **datatypes:** `i32 → (i32, i32)`, `ui32 → (ui32, ui32)` (both result vregs share the input signedness).
 - **lowering to `pto.mi`:**
@@ -220,7 +218,7 @@
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? (acc[i] + lhs[i] * rhs[i]) : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? (acc[i] + lhs[i] * rhs[i]) : 0;
   ```
 
 - **syntax:**
@@ -236,7 +234,8 @@
   | `rhs` | `!pto.vmi.vreg<L×T>` | Second multiply operand |
   | `mask` | `!pto.vmi.mask<L>` | Governing predicate |
 
-- **datatypes:** `i8`–`i32`, `f16`, `bf16`, `f32`
+- **datatypes:** `i16`, `u16`, `i32`, `u32`, `f16`, `bf16`, `f32`. A5 does
+  not support `i8` or `u8` VMULA operands.
 - **lowering to `pto.mi`:**
   ```
   K × pto.vmula
@@ -257,96 +256,119 @@
 
 ### `pto.vmi.vchist`
 
+`N` is the source/mask lane count; PTODSL requires both operands to have the
+same `N` in `1/2/4/8/64/128/256`. Other counts, including `96`, raise `ValueError`
+before the operation is constructed. Compiler-internal VMI types remain general.
+`B` is the accumulator/result bin count: `128` or `256`, independent of `N`.
+For example, `N=64, B=128` and `N=64, B=256` are both supported. Raw UB `ui8`
+loads at 64/128 lanes use bounded 2/4-block reads at aligned addresses.
+
 - **semantics:** **Cumulative histogram** over 8-bit source lanes
   (interpreted as unsigned). Counts per-bin occurrences over `%src` on top
-  of a carry-in accumulator `%acc`, producing a `half`-axis
-  (`Bin_N0`/`Bin_N1`) pair accessible through
-  the result's width axis. Full-form output is 256-bin (Bin_N0 + Bin_N1); if
-  the source range is known to be `< 128`, the result may be a 128-bin
-  Bin_N0-only vector.
+  of a carry-in accumulator `%acc`. `B=256` returns bins 0–255 using
+  Bin_N0 + Bin_N1; `B=128` returns bins 0–127 using Bin_N0 only. The result
+  is a logical vector of `B` bins; the low/high split is a physical detail.
+  The 128-bin form covers the full source range when samples are `< 128`.
 
   ```c
-  // Hardware chistv2: two halves (Bin_N0, Bin_N1), 256 bins total
-  uint16_t dhist[256];
-  for (int i = 0; i < L; i++)
+  // N source samples; B output bins (128 or 256)
+  uint16_t dhist[256] = {0};
+  for (int i = 0; i < N; i++)
       if (mask[i])
           dhist[src[i]]++;
-  uint16_t chist[256];
+  uint16_t chist[B];
   uint16_t cumulative = 0;
-  for (int b = 0; b < 256; b++) {
+  for (int b = 0; b < B; b++) {
       cumulative += dhist[b];
       chist[b] = acc[b] + cumulative;
   }
-  // dst carries Bin_N0 (bins 0–127) and Bin_N1 (bins 128–255) on a half axis
+  // B=128: Bin_N0 only; B=256: Bin_N0 and Bin_N1
   ```
 
 - **syntax:**
   ```mlir
   // output is Bin_N0 + Bin_N1
   %h = pto.vmi.vchist %acc, %src, %mask
-      : !pto.vmi.vreg<256×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<256×ui16>
+      : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<256xui16>
 
   // output is Bin_N0 when the source lanes are known to be < 128
   %h = pto.vmi.vchist %acc, %src, %mask
-      : !pto.vmi.vreg<128×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<128×ui16>
+      : !pto.vmi.vreg<128xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<128xui16>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `acc`  | `!pto.vmi.vreg<L×{ui16|i16}>` | Carry-in accumulator; same shape as `result` (256-bin Bin_N0+Bin_N1, or 128-bin Bin_N0-only). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
-  | `src`  | `!pto.vmi.vreg<L×{ui8|i8}>` | Source lanes to be binned; 8-bit element type is `ui8` or signless `i8` (interpreted as unsigned). |
-  | `mask` | `!pto.vmi.mask<L>` | Governing predicate over source lanes. Does not gate `acc`. |
+  | `acc`  | `!pto.vmi.vreg<B×{ui16\|i16}>` | Carry-in accumulator; same shape as `result` (256-bin Bin_N0+Bin_N1, or 128-bin Bin_N0-only). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
+  | `src`  | `!pto.vmi.vreg<N×{ui8\|i8}>` | Source lanes to be binned; 8-bit element type is `ui8` or signless `i8` (interpreted as unsigned). |
+  | `mask` | `!pto.vmi.mask<N×pred>` | Governing predicate over source lanes. Does not gate `acc`. |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.vreg<L×{ui16|i16}>` | Bin counts on top of `acc` (half axis: Bin_N0/N1 pair, or Bin_N0-only). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
+  | `result` | `!pto.vmi.vreg<B×{ui16\|i16}>` | Cumulative counts on top of `acc` (`B=128`: Bin_N0; `B=256`: Bin_N0+Bin_N1). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
 
 - **datatypes:** Source bin index: `ui8` or signless `i8`. Accumulator / result:
   `ui16` or signless `i16`. All are interpreted as
   unsigned; signed types (`si8` / `si16`) are rejected by the verifier.
 - **lowering to `pto.mi`:**
   ```
-  chistv2 Bin_N0 + Bin_N1 (two-half fanout) + widen/accumulate
+  B=128: chistv2 Bin_N0 accumulator chain
+  B=256: chistv2 Bin_N0 and Bin_N1 accumulator chains
   ```
-  `#mi ≈ 2K`, `dep = 2–3`. INTLV merge on store.
+  For `K = ceil(N / 256)` physical source chunks, this emits `K * (B / 128)`
+  histogram instructions, excluding masks and memory operations. Thus public
+  PTODSL sizes emit one instruction for `B=128`, or two for `B=256`. Bin_N1
+  uses global cumulative semantics; no software prefix compensation is needed.
+
+  The source operand must be `contiguous`. Raw UB inputs support one-lane
+  scalar loads, aligned single-block short reads, aligned exact 64/128-byte multi-block
+  reads, and full 256-byte register reads. The lowering intersects the input
+  predicate with logical validity, so padding lanes never contribute.
 
 - **example:**
   ```mlir
   // Cumulative histogram, full 256-bin (Bin_N0 + Bin_N1) output
   %h = pto.vmi.vchist %acc, %src, %mask
-      : !pto.vmi.vreg<256×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<256×ui16>
-  // → pto.as: Bin_N0 + Bin_N1 fanout → INTLV merge on vstore
+      : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<256xui16>
+  // → two physical chistv2 instructions, one per 128-bin result part
 
-  // Bin_N0-only 128-bin output (source lanes known to be < 128)
-  %h0 = pto.vmi.vchist %acc0, %src, %mask
-      : !pto.vmi.vreg<128×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<128×ui16>
+  // N=64 samples, B=128 bins (sample values known to be < 128)
+  %h0 = pto.vmi.vchist %acc0, %src64, %mask64
+      : !pto.vmi.vreg<128xui16>, !pto.vmi.vreg<64xui8>, !pto.vmi.mask<64xpred>
+     -> !pto.vmi.vreg<128xui16>
 
   // signless i16/i8 also accepted (interpreted as unsigned; acc and result must match)
   %hs = pto.vmi.vchist %acc, %src, %mask
-      : !pto.vmi.vreg<256×i16>, !pto.vmi.vreg<256×i8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<256×i16>
+      : !pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<256xi16>
   ```
 
 ### `pto.vmi.vdhist`
 
+`N` is the source/mask lane count; PTODSL requires both operands to have the
+same `N` in `1/2/4/8/64/128/256`. Other counts, including `96`, raise `ValueError`
+before the operation is constructed. Compiler-internal VMI types remain general.
+`B` is the accumulator/result bin count: `128` or `256`, independent of `N`.
+For example, `N=64, B=128` and `N=64, B=256` are both supported. Raw UB `ui8`
+loads at 64/128 lanes use bounded 2/4-block reads at aligned addresses.
+
 - **semantics:** **Distribution histogram** over 8-bit source lanes
   (interpreted as unsigned). Counts per-bin occurrences over `%src` on top
-  of a carry-in accumulator `%acc`, yielding a plain per-bin count vector
-  (no `half` axis).
+  of a carry-in accumulator `%acc`, yielding a logical vector of `B` per-bin
+  counts. `B=128` returns bins 0–127; `B=256` returns all bins 0–255. The
+  128-bin form covers the full source range when samples are `< 128`.
 
   ```c
-  // Plain per-bin distribution count
-  uint16_t dhist[N];
-  for (int b = 0; b < N; b++) dhist[b] = acc[b];     // carry-in
-  for (int i = 0; i < L; i++)
-      if (mask[i])
+  // N source samples; B output bins (128 or 256)
+  uint16_t dhist[B];
+  for (int b = 0; b < B; b++) dhist[b] = acc[b];     // carry-in
+  for (int i = 0; i < N; i++)
+      if (mask[i] && src[i] < B)
           dhist[src[i]]++;
   ```
 
@@ -354,53 +376,58 @@
   ```mlir
   // 256-bin full output
   %d = pto.vmi.vdhist %acc, %src, %mask
-      : !pto.vmi.vreg<256×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<256×ui16>
+      : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<256xui16>
 
   // 128-bin output when the source lanes are known to be < 128
   %d = pto.vmi.vdhist %acc, %src, %mask
-      : !pto.vmi.vreg<128×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<128×ui16>
+      : !pto.vmi.vreg<128xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<128xui16>
   ```
 - **operands:**
 
   | Operand | Type | Description |
   |---|---|---|
-  | `acc`  | `!pto.vmi.vreg<L×{ui16|i16}>` | Carry-in accumulator; same shape as `result` (256-bin full, or 128-bin when the source range is known to be < 128). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
-  | `src`  | `!pto.vmi.vreg<L×{ui8|i8}>` | Source lanes to be binned; 8-bit element type is `ui8` or signless `i8` (interpreted as unsigned). |
-  | `mask` | `!pto.vmi.mask<L>` | Governing predicate over source lanes. Does not gate `acc`. |
+  | `acc`  | `!pto.vmi.vreg<B×{ui16\|i16}>` | Carry-in accumulator; same shape as `result` (`B=256`: bins 0–255; `B=128`: bins 0–127). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
+  | `src`  | `!pto.vmi.vreg<N×{ui8\|i8}>` | Source lanes to be binned; 8-bit element type is `ui8` or signless `i8` (interpreted as unsigned). |
+  | `mask` | `!pto.vmi.mask<N×pred>` | Governing predicate over source lanes. Does not gate `acc`. |
 
 - **results:**
 
   | Result | Type | Description |
   |---|---|---|
-  | `result` | `!pto.vmi.vreg<L×{ui16|i16}>` | Plain per-bin count vector on top of `acc` (256-bin full, or 128-bin when the source range is known to be < 128). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
+  | `result` | `!pto.vmi.vreg<B×{ui16\|i16}>` | Plain per-bin count vector on top of `acc` (`B=256`: bins 0–255; `B=128`: bins 0–127). Element type is `ui16` or signless `i16` (interpreted as unsigned). |
 
 - **datatypes:** Source bin index: `ui8` or signless `i8`. Accumulator / result:
   `ui16` or signless `i16`. All are interpreted as
   unsigned; signed types (`si8` / `si16`) are rejected by the verifier.
 - **lowering to `pto.mi`:**
   ```
-  distribution histogram accumulate (no half-axis fanout)
+  B=128: dhistv2 Bin_N0 accumulator chain
+  B=256: dhistv2 Bin_N0 and Bin_N1 accumulator chains
   ```
-  `#mi ≈ K`, `dep = 2`.
+  For `K = ceil(N / 256)` physical source chunks, this emits `K * (B / 128)`
+  histogram instructions, excluding masks and memory operations. Thus public
+  PTODSL sizes emit one instruction for `B=128`, or two for `B=256`. The
+  source and mask must be contiguous, and lowering intersects the b8 user
+  mask with logical validity so padding lanes never contribute.
 
 - **example:**
   ```mlir
   // Distribution histogram, plain per-bin count (256-bin full)
   %d = pto.vmi.vdhist %acc, %src, %mask
-      : !pto.vmi.vreg<256×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<256×ui16>
+      : !pto.vmi.vreg<256xui16>, !pto.vmi.vreg<256xui8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<256xui16>
 
-  // 128-bin output (source lanes known to be < 128)
-  %d0 = pto.vmi.vdhist %acc0, %src, %mask
-      : !pto.vmi.vreg<128×ui16>, !pto.vmi.vreg<256×ui8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<128×ui16>
+  // N=64 samples, B=128 bins (sample values known to be < 128)
+  %d0 = pto.vmi.vdhist %acc0, %src64, %mask64
+      : !pto.vmi.vreg<128xui16>, !pto.vmi.vreg<64xui8>, !pto.vmi.mask<64xpred>
+     -> !pto.vmi.vreg<128xui16>
 
   // signless i16/i8 also accepted (interpreted as unsigned; acc and result must match)
   %ds = pto.vmi.vdhist %acc, %src, %mask
-      : !pto.vmi.vreg<256×i16>, !pto.vmi.vreg<256×i8>, !pto.vmi.mask<256>
-     -> !pto.vmi.vreg<256×i16>
+      : !pto.vmi.vreg<256xi16>, !pto.vmi.vreg<256xi8>, !pto.vmi.mask<256xpred>
+     -> !pto.vmi.vreg<256xi16>
   ```
 
 
@@ -418,7 +445,7 @@
 
   ```c
   for (int i = 0; i < L; i++)
-      dst[i] = mask[i] ? ub[base + offsets[i]] : (pmode_merge ? dst_old[i] : 0);
+      dst[i] = mask[i] ? ub[base + offsets[i]] : 0;
   ```
 
 - **syntax:**
@@ -482,6 +509,18 @@
   K × pto.vscatter
   ```
   `#mi = K`, `dep = 1`.
+
+  Value, offsets and mask use unit-stride `contiguous` layouts. The PTODSL
+  public logical lane whitelist is `1/2/4/8/64/128/256`; invalid counts such as
+  96 are rejected in Python. Internal VMI types remain general.
+
+  B32/B16 support partial chunks by intersecting the user mask with logical
+  validity. Full chunks do not need an extra intersection. B8 uses dense data
+  and a logical b8 mask. Lowering zero-unpacks each low/high 128-byte half into
+  the low bytes of B16 request slots, bitcasts back to the original byte type,
+  unpacks the matching predicate half to b16, and masks the last request group.
+  The number of physical scatters is `ceil(L/64)` for B32 and `ceil(L/128)`
+  for B16/B8. Active indices must be valid and pairwise distinct.
 
 - **example:**
   ```mlir

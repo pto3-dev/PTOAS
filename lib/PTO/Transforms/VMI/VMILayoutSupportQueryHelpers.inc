@@ -1,0 +1,368 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+#ifndef VMILAYOUTSUPPORTQUERYHELPERS_INC
+#define VMILAYOUTSUPPORTQUERYHELPERS_INC
+
+//===- VMILayoutSupportQueryHelpers.inc - VMI query helpers -*- C++ -*-===//
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+struct GroupBroadcastLoadQuery {
+  VMIVRegType resultType;
+  VMILayoutAttr resultLayout;
+  std::optional<int64_t> stride;
+  GroupLayoutKey key;
+  int64_t numGroups;
+  unsigned elementBits;
+};
+
+inline bool matchesGroupBroadcastLoadPattern(
+    const GroupBroadcastLoadLayoutPattern &pattern,
+    const GroupBroadcastLoadQuery &query) {
+  return matchesGroupBlockPattern(pattern.block, query.key) &&
+         matchesElementCountPattern(pattern.numGroups, query.numGroups) &&
+         matchesElementBitsPattern(pattern.elementBits, query.elementBits) &&
+         matchesGroupBroadcastLoadMemoryPattern(pattern.memory, query.stride,
+                                                query.elementBits) &&
+         matchesLayoutPattern(query.resultType.getContext(),
+                              pattern.resultLayout, query.resultLayout,
+                              query.numGroups);
+}
+
+inline VMIGroupBroadcastLoadLayoutFact materializeGroupBroadcastLoadFact(
+    const GroupBroadcastLoadLayoutPattern &pattern,
+    const GroupBroadcastLoadQuery &query) {
+  return {getGroupBlockClassFromPattern(pattern.block),
+          query.resultLayout,
+          query.key.groupSize,
+          query.key.lanesPerPart,
+          query.key.vcgBlockElems,
+          static_cast<int64_t>(query.elementBits)};
+}
+
+inline bool matchesGroupBroadcastLoadDirectPattern(
+    const GroupBroadcastLoadDirectPattern &pattern,
+    const GroupBroadcastLoadQuery &query) {
+  return matchesElementCountPattern(pattern.numGroups, query.numGroups) &&
+         matchesGroupBlockPattern(pattern.block, query.key) &&
+         matchesElementBitsPattern(pattern.elementBits, query.elementBits) &&
+         matchesGroupBroadcastLoadMemoryPattern(pattern.memory, query.stride,
+                                                query.elementBits);
+}
+
+struct GroupStoreMaterializationQuery {
+  VMIVRegType valueType;
+  VMIVRegType sourceType;
+  GroupLayoutKey key;
+  std::optional<int64_t> rowStride;
+};
+
+inline void appendMaterializableGroupStoreFacts(
+    const VMILayoutSupport &support,
+    const GroupStoreMaterializationQuery &query,
+    SmallVectorImpl<VMIGroupStoreLayoutFact> &facts) {
+  MLIRContext *ctx = query.valueType.getContext();
+  for (const GroupStoreLayoutPattern &pattern : kGroupStoreLayoutPatterns) {
+    if (!matchesGroupStoreLayoutPattern(pattern, query.valueType, query.key,
+                                        query.rowStride)) {
+      continue;
+    }
+    VMILayoutAttr useLayout =
+        materializeLayoutPattern(ctx, pattern.valueLayout);
+    bool duplicate = llvm::any_of(
+        facts, [useLayout](const VMIGroupStoreLayoutFact &fact) {
+          return fact.valueLayout == useLayout;
+        });
+    if (!useLayout || duplicate) {
+      continue;
+    }
+    auto useType = VMIVRegType::get(
+        ctx, query.valueType.getElementCount(),
+        query.valueType.getElementType(), useLayout);
+    if (failed(support.getEnsureLayoutFact(query.sourceType, useType,
+                                           nullptr))) {
+      continue;
+    }
+    VMIGroupStoreLayoutFact fact =
+        materializeGroupStoreLayoutFact(ctx, pattern, query.key);
+    fact.valueLayout = useLayout;
+    facts.push_back(fact);
+  }
+}
+
+inline std::optional<VMIGroupStoreLayoutFact>
+getPreferredGroupSlotStoreFact(const VMILayoutSupport &support,
+                               VMIGroupStoreOp op, VMIVRegType valueType,
+                               int64_t numGroups) {
+  bool hasOneLanePerGroup = valueType.getElementCount() == numGroups;
+  if (!hasOneLanePerGroup) {
+    return std::nullopt;
+  }
+  std::optional<int64_t> rowStride = getConstantIndexValue(op.getRowStride());
+  // A unit row stride writes the group values back to back, which is what a
+  // dense short vector already holds in one carrier, so prefer the packed slot
+  // form for it.  One carrier per group stays as the fallback: a group reduce
+  // over whole parts really does produce one part per group, and only the
+  // slots = 1 group_store lowering can pack that back together.
+  SmallVector<int64_t, mlir::pto::kValue2> slotCandidates;
+  if (rowStride && *rowStride == 1) {
+    slotCandidates.push_back(mlir::pto::kValue8);
+  }
+  slotCandidates.push_back(1);
+  for (int64_t slots : slotCandidates) {
+    VMILayoutAttr layout = VMILayoutAttr::getGroupSlots(
+        valueType.getContext(), numGroups, slots);
+    auto assignedType = VMIVRegType::get(
+        valueType.getContext(), valueType.getElementCount(),
+        valueType.getElementType(), layout);
+    if (succeeded(support.getGroupStoreLayoutFact(op, assignedType,
+                                                  nullptr))) {
+      return VMIGroupStoreLayoutFact{layout};
+    }
+  }
+  return std::nullopt;
+}
+
+inline const GroupStoreLayoutPattern *selectPreferredGroupStorePattern(
+    VMIVRegType valueType, GroupLayoutKey key,
+    std::optional<int64_t> rowStride) {
+  const GroupStoreLayoutPattern *selected = nullptr;
+  for (const GroupStoreLayoutPattern &pattern : kGroupStoreLayoutPatterns) {
+    if (pattern.priority == GroupStoreLayoutPriority::LegalOnly ||
+        !matchesGroupStoreLayoutPattern(pattern, valueType, key, rowStride)) {
+      continue;
+    }
+    bool hasHigherPriority =
+        !selected || static_cast<unsigned>(pattern.priority) >
+                         static_cast<unsigned>(selected->priority);
+    if (hasHigherPriority) {
+      selected = &pattern;
+    }
+  }
+  return selected;
+}
+
+} // namespace
+
+//===----------------------------------------------------------------------===//
+// Support-query adapters
+//===----------------------------------------------------------------------===//
+
+inline LogicalResult
+getGroupReduceAddSupportImpl(VMIGroupReduceKind kind, VMIVRegType sourceType,
+                             VMIMaskType maskType, VMIVRegType resultType,
+                             int64_t numGroups, std::string *reason) {
+  FailureOr<VMIGroupReduceLayoutFact> fact =
+      VMILayoutSupport().getGroupReduceLayoutFactForLayouts(
+          kind, sourceType, maskType, resultType, numGroups, reason);
+  if (failed(fact)) {
+    return failure();
+  }
+  return success();
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceAddFSupport(VMIGroupReduceAddFOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      getVMIGroupReduceKind(op), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceMaxFSupport(VMIGroupReduceMaxFOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      getVMIGroupReduceKind(op), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceMinFSupport(VMIGroupReduceMinFOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      getVMIGroupReduceKind(op), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceAddISupport(VMIGroupReduceAddIOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      getVMIGroupReduceKind(op), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceMaxISupport(VMIGroupReduceMaxIOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      getVMIGroupReduceKind(op), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupReduceMinISupport(VMIGroupReduceMinIOp op,
+                                            std::string *reason) const {
+  return getGroupReduceAddSupportImpl(
+      getVMIGroupReduceKind(op), cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIMaskType>(op.getMask().getType()),
+      cast<VMIVRegType>(op.getResult().getType()),
+      op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult VMILayoutSupport::getGroupBroadcastSupport(
+    VMIGroupBroadcastOp op, std::string *reason) const {
+  return getGroupBroadcastSupport(cast<VMIVRegType>(op.getSource().getType()),
+                                  cast<VMIVRegType>(op.getResult().getType()),
+                                  op.getNumGroupsAttr().getInt(), reason);
+}
+
+LogicalResult
+VMILayoutSupport::getGroupBroadcastLoadSupport(VMIGroupBroadcastLoadOp op,
+                                               std::string *reason) const {
+  return success(succeeded(getGroupBroadcastLoadLayoutFact(op, reason)));
+}
+
+LogicalResult VMILayoutSupport::getGroupBroadcastSupport(
+    VMIVRegType sourceType, VMIVRegType resultType, int64_t numGroups,
+    std::string *reason) const {
+  return success(succeeded(getGroupBroadcastLayoutFactForLayouts(
+      sourceType, resultType, numGroups, reason)));
+}
+
+inline LogicalResult getNarrowCastSupport(VMIVRegType sourceType,
+                                          VMIVRegType resultType,
+                                          std::string *reason) {
+  if (succeeded(VMILayoutSupport().getCastLayoutFactForLayouts(
+          sourceType, resultType, sourceType.getLayoutAttr(),
+          resultType.getLayoutAttr(), reason))) {
+    return success();
+  }
+  return success(isSpineScopedCastLayoutPair(
+                     sourceType, resultType, sourceType.getLayoutAttr(),
+                     resultType.getLayoutAttr()) ||
+                 isDeinterleaved4ToContiguousBF16CastPair(
+                     sourceType, resultType, sourceType.getLayoutAttr(),
+                     resultType.getLayoutAttr()));
+}
+
+LogicalResult VMILayoutSupport::getTruncFSupport(VMITruncFOp op,
+                                                 std::string *reason) const {
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  if (succeeded(getNarrowCastSupport(sourceType, resultType, reason))) {
+    return success();
+  }
+  StringAttr rounding = op->getAttrOfType<StringAttr>("rounding");
+  bool zeroRound = rounding && rounding.getValue() == "Z";
+  VMILayoutAttr sourceLayout = sourceType.getLayoutAttr();
+  VMILayoutAttr resultLayout = resultType.getLayoutAttr();
+  // Permit already-assigned reduction cast pairs whose matching group-slot
+  // layouts are lowered by the dedicated zero-paired vdintlv path. This is a
+  // validation exception only; it does not add a layout-assignment candidate.
+  bool sameGroupSlotReduceLayout =
+      sourceType.getElementType().isF32() &&
+      resultType.getElementType().isBF16() &&
+      sourceType.getElementCount() == resultType.getElementCount() &&
+      (sourceType.getElementCount() == 2 ||
+       sourceType.getElementCount() == 4 ||
+       sourceType.getElementCount() == 8) &&
+      sourceLayout && resultLayout && sourceLayout.isGroupSlots() &&
+      resultLayout.isGroupSlots() &&
+      sourceLayout.getNumGroups() == sourceType.getElementCount() &&
+      sourceLayout.getNumGroups() == resultLayout.getNumGroups() &&
+      sourceLayout.getSlots() == resultLayout.getSlots() &&
+      (sourceLayout.getSlots() == 1 || sourceLayout.getSlots() == 8) &&
+      sourceLayout.getLaneStride() == resultLayout.getLaneStride();
+  bool sameRegularLayoutBF16Pair =
+      isBF16SameLayoutCastPair(sourceType, resultType, sourceLayout,
+                               resultLayout);
+  return success(zeroRound &&
+                 (sameRegularLayoutBF16Pair || sameGroupSlotReduceLayout));
+}
+
+LogicalResult VMILayoutSupport::getExtFSupport(VMIExtFOp op,
+                                               std::string *reason) const {
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  if (succeeded(getCastLayoutFactForLayouts(
+          sourceType, resultType, sourceType.getLayoutAttr(),
+          resultType.getLayoutAttr(), reason))) {
+    return success();
+  }
+  if (isSpineScopedCastLayoutPair(sourceType, resultType,
+                                  sourceType.getLayoutAttr(),
+                                  resultType.getLayoutAttr())) {
+    return success();
+  }
+  return success(isBF16SameLayoutCastPair(
+      sourceType, resultType, sourceType.getLayoutAttr(),
+      resultType.getLayoutAttr()));
+}
+
+LogicalResult VMILayoutSupport::getVUnzipSupport(VMIVUnzipOp op,
+                                                std::string *reason) const {
+  return checkHalfWidthLayouts(
+      cast<VMIVRegType>(op.getSource().getType()),
+      cast<VMIVRegType>(op.getLow().getType()),
+      cast<VMIVRegType>(op.getHigh().getType()), reason);
+}
+
+LogicalResult VMILayoutSupport::getVZipSupport(VMIVZipOp op,
+                                              std::string *reason) const {
+  return checkHalfWidthLayouts(
+      cast<VMIVRegType>(op.getResult().getType()),
+      cast<VMIVRegType>(op.getLow().getType()),
+      cast<VMIVRegType>(op.getHigh().getType()), reason);
+}
+
+template <typename OpT>
+inline LogicalResult getExtISupportImpl(OpT op, std::string *reason) {
+  auto sourceType = cast<VMIVRegType>(op.getSource().getType());
+  auto resultType = cast<VMIVRegType>(op.getResult().getType());
+  if (succeeded(VMILayoutSupport().getCastLayoutFactForLayouts(
+          sourceType, resultType, sourceType.getLayoutAttr(),
+          resultType.getLayoutAttr(), reason))) {
+    return success();
+  }
+  return success(isSpineScopedCastLayoutPair(
+      sourceType, resultType, sourceType.getLayoutAttr(),
+      resultType.getLayoutAttr()));
+}
+
+LogicalResult VMILayoutSupport::getExtSISupport(VMIExtSIOp op,
+                                                std::string *reason) const {
+  return getExtISupportImpl(op, reason);
+}
+
+LogicalResult VMILayoutSupport::getExtUISupport(VMIExtUIOp op,
+                                                std::string *reason) const {
+  return getExtISupportImpl(op, reason);
+}
+
+LogicalResult
+VMILayoutSupport::getTruncISupport(VMITruncIOp op, std::string *reason) const {
+  return getNarrowCastSupport(cast<VMIVRegType>(op.getSource().getType()),
+                              cast<VMIVRegType>(op.getResult().getType()),
+                              reason);
+}
+
+#endif // VMILAYOUTSUPPORTQUERYHELPERS_INC

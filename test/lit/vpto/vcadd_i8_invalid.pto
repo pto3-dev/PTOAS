@@ -1,0 +1,47 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not pto-test-opt %t/i8.pto 2>&1 | FileCheck %s
+// RUN: not ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %t/i8.pto 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %t/si8.pto 2>&1 | FileCheck %s
+// RUN: not ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %t/si8.pto 2>&1 | FileCheck %s
+// RUN: not pto-test-opt %t/ui8.pto 2>&1 | FileCheck %s
+// RUN: not ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto %t/ui8.pto 2>&1 | FileCheck %s
+
+// CHECK: error: 'pto.vcadd' op requires 16-bit or 32-bit integer, f16, or f32 vector element type
+
+//--- i8.pto
+module {
+  func.func @reject_i8(%src: !pto.vreg<256xi8>, %mask: !pto.mask<b8>)
+      -> !pto.vreg<128xi16> {
+    %sum = pto.vcadd %src, %mask
+        : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<128xi16>
+    return %sum : !pto.vreg<128xi16>
+  }
+}
+
+//--- si8.pto
+module {
+  func.func @reject_si8(%src: !pto.vreg<256xsi8>, %mask: !pto.mask<b8>)
+      -> !pto.vreg<128xsi16> {
+    %sum = pto.vcadd %src, %mask
+        : !pto.vreg<256xsi8>, !pto.mask<b8> -> !pto.vreg<128xsi16>
+    return %sum : !pto.vreg<128xsi16>
+  }
+}
+
+//--- ui8.pto
+module {
+  func.func @reject_ui8(%src: !pto.vreg<256xui8>, %mask: !pto.mask<b8>)
+      -> !pto.vreg<128xui16> {
+    %sum = pto.vcadd %src, %mask
+        : !pto.vreg<256xui8>, !pto.mask<b8> -> !pto.vreg<128xui16>
+    return %sum : !pto.vreg<128xui16>
+  }
+}

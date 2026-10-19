@@ -10,8 +10,9 @@
 
 // Regression pins for the e4m3 "odd columns = 0" bug and the FP4 packed-pair
 // lowering contract:
-//   1. dense f8 -> f32 must keep the stock factor-4 form (P0-P3), never a
-//      sub-byte part selection;
+//   1. dense non-lane-strided f8 -> f32 must keep the stock factor-4 form
+//      (P0-P3); the dense lane-stride=2 UNPK_B8 case is covered in
+//      vmi_extf_dense_f8_ls2.pto;
 //   2. packed f4E2M1x2 with a lane-stride source must select the parts that
 //      cover the real bytes (P0/P2 for ls(2)) and never the zero-fill gaps
 //      (P1/P3), which was the original pre-578dec5d 47% FP4 bug shape.

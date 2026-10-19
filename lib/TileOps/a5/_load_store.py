@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,11 +6,13 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Shared helpers for PTODSL TileLib load/store template ports."""
 
 from ptodsl import pto
 
 from ._common import NUMERIC_DTYPES
+from ._cube import CUBE_MOVE_DTYPE_NAMES, CUBE_MOVE_DTYPES
 
 
 INTEGER_LOAD_STORE_DTYPES = (
@@ -24,7 +27,11 @@ LOW_PRECISION_LOAD_STORE_DTYPES = ("f8e4m3", "f8e5m2", "hif8", "f4e1m2x2", "f4e2
 LOAD_STORE_DTYPES = tuple(
     (dtype, dtype) for dtype in NUMERIC_DTYPES + INTEGER_LOAD_STORE_DTYPES + LOW_PRECISION_LOAD_STORE_DTYPES
 )
-MAT_LOAD_DTYPES = (("f16", "f16"), ("bf16", "bf16"), ("f32", "f32"))
+# GM -> MAT tload packs the source matrix into the NZ fractal form.  Like the
+# MAT -> LEFT/RIGHT moves it is a dtype pass-through (the element type is
+# carried by the pointer types), so it shares one table with them.
+MAT_LOAD_DTYPE_NAMES = CUBE_MOVE_DTYPE_NAMES
+MAT_LOAD_DTYPES = CUBE_MOVE_DTYPES
 ACC_STORE_DTYPES = (
     ("f32", "f32"),
     ("f32", "f16"),
@@ -224,7 +231,7 @@ def tload_mat_nd2nz_constraint(src_kind, src_shape, src_strides, src_memory_spac
         return False
     if dst_config.b_layout != "col_major" or dst_config.s_layout != "row_major":
         return False
-    if dst_dtype not in {"f16", "bf16", "f32"}:
+    if dst_dtype not in MAT_LOAD_DTYPE_NAMES:
         return False
     if _view_rank(src_shape) != 5:
         return False
@@ -240,7 +247,7 @@ def tload_mat_dn2nz_constraint(src_kind, src_shape, src_strides, src_memory_spac
         return False
     if dst_config.b_layout != "col_major" or dst_config.s_layout != "row_major":
         return False
-    if dst_dtype not in {"f16", "bf16", "f32"}:
+    if dst_dtype not in MAT_LOAD_DTYPE_NAMES:
         return False
     if _view_rank(src_shape) != 5:
         return False

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -6,6 +7,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Regression: pto.vmi.vci accepts a dynamic MLIR index base (loop IV).
 
 Dynamic loop indices must coerce to an i32 sreg so ODS/verify accept the op
@@ -168,15 +170,14 @@ def main() -> None:
             idx, dst.as_ptr(), pto.const(0, dtype=pto.index)
         )
 
-    g1_tail = vmi_vci_group1_tail_probe.compile().mlir_text()
-    expect(
-        "pto.vmi.vci" in g1_tail,
-        f"group=1 size=100 must emit vci:\n{g1_tail[:1500]}",
-    )
-    expect(
-        "!pto.vmi.vreg<100xi32" in g1_tail,
-        f"group=1 size=100 must keep logical length 100:\n{g1_tail[:1500]}",
-    )
+    # Internal group=1 handling accepts tails, but public PTODSL still rejects
+    # a logical size outside the seven supported lane counts.
+    try:
+        vmi_vci_group1_tail_probe.compile()
+    except ValueError as err:
+        expect("1, 2, 4, 8, 64, 128, 256" in str(err), str(err))
+    else:
+        raise AssertionError("group=1 must not bypass the public lane whitelist")
 
     print("ptodsl_vmi_vci_dynamic_index: PASS")
 

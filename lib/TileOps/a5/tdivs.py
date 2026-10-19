@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """PTODSL TileLib template for pto.tdivs."""
 
 from ptodsl import pto
@@ -16,7 +18,7 @@ from ._elementwise import (
     emit_scalar_binary_2d,
     traversal_metadata,
 )
-from .div_hp import _div_ieee754_f32_impl, _div_ieee754_f16_impl
+from .elementwise.div_hp import _div_ieee754_f32_impl, _div_ieee754_f16_impl
 from SoftOps import div_i32_soft
 
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -11,7 +12,6 @@ import numpy as np
 
 from common import auto_main, golden_output_case
 from ptodsl import pto
-from ptodsl import scalar
 
 
 LANES = 32
@@ -23,10 +23,10 @@ def simt_gm_memory_core_body(
     out: pto.ptr(pto.i32, "gm"),
 ):
     tid = pto.get_tid_x()
-    idx = scalar.index_cast(tid)
-    loaded = scalar.load(inp, idx)
-    scalar.store(loaded + tid + 1000, out, idx)
-    scalar.store(tid, out, scalar.index_cast(tid + LANES))
+    idx = tid
+    loaded = pto.load(inp, idx)
+    pto.store(loaded + tid + 1000, out, idx)
+    pto.store(tid, out, tid + LANES)
 
 
 @pto.jit(

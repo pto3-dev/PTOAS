@@ -7,7 +7,7 @@
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto-llvm-ir %s -o - 2>&1 | FileCheck %s
-// RUN: ptoas --cann-output-version=9.0.0 --pto-arch=a5 --pto-backend=vpto --emit-vpto-llvm-ir %s -o - 2>&1 | FileCheck %s
+// RUN: ptoas --pto-arch=a5 --pto-backend=vpto --emit-vpto-llvm-ir %s -o - 2>&1 | FileCheck %s
 
 module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<vector>} {
   func.func @simt_fp8_local_contiguous_memory(
@@ -22,8 +22,8 @@ module attributes {pto.target_arch = "a5", pto.kernel_kind = #pto.kernel_kind<ve
       %src_addr = pto.castptr %src : !pto.ptr<f32, ub> -> i64
       %src_ptr = llvm.inttoptr %src_addr : i64 to !llvm.ptr<6>
       %src_pair = llvm.load %src_ptr : !llvm.ptr<6> -> vector<2xf32>
-      %e4_pair = pto.convert %src_pair round(r) sat : vector<2xf32> -> vector<2xf8E4M3FN>
-      %e5_pair = pto.convert %src_pair round(r) sat : vector<2xf32> -> vector<2xf8E5M2>
+      %e4_pair = pto.ftof %src_pair round(r) sat : vector<2xf32> -> vector<2xf8E4M3FN>
+      %e5_pair = pto.ftof %src_pair round(r) sat : vector<2xf32> -> vector<2xf8E5M2>
       llvm.store %e4_pair, %local_e4 : vector<2xf8E4M3FN>, !llvm.ptr
       llvm.store %e5_pair, %local_e5 : vector<2xf8E5M2>, !llvm.ptr
 

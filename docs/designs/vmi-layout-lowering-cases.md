@@ -82,9 +82,9 @@ Required invariants:
 ```text
 G > 0
 K > 0
-G % K == 0
-K must fit in the physical vreg element count
 LS > 0
+(K - 1) * LS must fit in the physical vreg element count
+physical packet count = ceil(G / K); the final packet may be partial
 ```
 
 `LS` defaults to 1 and is counted in logical element-sized physical slots.  It
@@ -93,11 +93,19 @@ gap.  For example, `ui8 lane_stride=4` places group slots in byte positions 0,
 4, 8, ... and can be lowered to a b32 carrier plus `PK4_B32` store.
 
 `K` is selected by the producer/consumer layout support rule. It is not always 8. For
-`VCGADD`-packed results, `K = 8` matches the eight 32B block results written to
-the low lanes of one destination vreg. For row-local reductions where each
+native VCG results, `K = 8` matches the eight 32B block results written to
+one destination vreg. Integer 16-bit `vcgadd` uses `LS = 2`, exposing the low
+halfwords of the hardware's 32-bit sums; floating-point addition and integer
+max/min use `LS = 1`. These producer layouts are independent of consumers.
+For row-local reductions where each
 logical group already occupies one full 256B vreg, `K = 1` keeps each group's
 scalar result in lane 0 of its own physical vreg and avoids an unsupported
 cross-vreg scalar pack.
+
+The VMI group-slot type has `G` logical elements, regardless of the source
+tile's element count or the number of physical lanes allocated to each packet.
+For example, eight f32 group results have type `8xf32` for both `slots=8`
+and `slots=1`.
 
 Only these lanes are semantic:
 
@@ -105,8 +113,9 @@ Only these lanes are semantic:
 physical slot block slot_block(g), lane slot_lane(g)
 ```
 
-All other lanes are undefined for ordinary VMI consumers. They may only be read
-by group-aware ops that define how to interpret group slots.
+All other lanes are padding, with no logical value. Consumers must use the
+assigned slot map; the high halfwords of native integer sums are not extra
+groups and need not be zero.
 
 ## 2. Layout Support Selection Rules
 
@@ -236,7 +245,7 @@ the immediately following complete endpoints.
 3.10 non-load producer feeding S=32 group_reduce         complete
 3.11 partial tail groups                                 complete/diagnostic
 3.12 control-flow join before group_reduce               complete
-3.13 packed group-slot f32 -> f16 cast                   illegal diagnostic
+3.13 packed group-slot f32 -> f16 cast                   slot-preserving relation
 3.14 unsupported group size                              illegal diagnostic
 3.15 compact S=12 written as logical S=16                complete/diagnostic
 3.16 group_slot_load layout contract                     complete
@@ -419,7 +428,7 @@ VMI input:
 %x8  = pto.vmi.load %base[%off]
 %x32 = pto.vmi.extf %x8
 %scale = pto.vmi.broadcast %scale_s : f32 -> !pto.vmi.vreg<256xf32>
-%y32 = pto.vmi.mulf %x32, %scale
+%y32 = pto.vmi.vmul %x32, %scale
 %y8  = pto.vmi.truncf %y32
 pto.vmi.store %y8, %out[%off]
 ```
@@ -506,7 +515,7 @@ Assigned layouts:
 ```text
 %x    : !pto.vmi.vreg<64xf32, #pto.vmi.layout<contiguous>>
 %mask : !pto.vmi.mask<64xpred, #pto.vmi.layout<contiguous>>
-%sum  : !pto.vmi.vreg<64xf32,
+%sum  : !pto.vmi.vreg<8xf32,
           #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
@@ -680,7 +689,7 @@ VMI input:
   : memref<Nxf32> -> !pto.vmi.vreg<Nxf32>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = N / 16}
 %b = pto.vmi.group_broadcast %sum {num_groups = N / 16}
-%y = pto.vmi.mulf %x, %b
+%y = pto.vmi.vmul %x, %b
 %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = N / 16}
 pto.vmi.group_store %ysum, %out[%group_off], %c1 {num_groups = N / 16}
 ```
@@ -845,7 +854,7 @@ VMI input:
 %rhs = pto.vmi.group_slot_load %rhs_base[%rhs_off], %c1 {num_groups = 8}
   : !pto.ptr<f32, ub> -> !pto.vmi.vreg<128xf32>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
-%outv = pto.vmi.addf %sum, %rhs
+%outv = pto.vmi.vadd %sum, %rhs
 pto.vmi.group_store %outv, %out[%group_off], %c1 {num_groups = 8}
 ```
 
@@ -857,13 +866,13 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %rhs:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %outv:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 For this endpoint, the RHS is a packed per-group vector:
@@ -1007,7 +1016,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -1060,7 +1069,7 @@ VMI input:
 %rhs = pto.vmi.group_slot_load %rhs_base[%rhs_off], %c1 {num_groups = 8}
   : !pto.ptr<f32, ub> -> !pto.vmi.vreg<256xf32>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
-%outv = pto.vmi.addf %sum, %rhs
+%outv = pto.vmi.vadd %sum, %rhs
 pto.vmi.group_store %outv, %out[%group_off], %c1 {num_groups = 8}
 ```
 
@@ -1071,7 +1080,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum, %rhs, %outv:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -1131,7 +1140,7 @@ VMI input:
   : memref<256xf32> -> !pto.vmi.vreg<256xf32>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
 %b = pto.vmi.group_broadcast %sum {num_groups = 8}
-%y = pto.vmi.mulf %x, %b
+%y = pto.vmi.vmul %x, %b
 %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8}
 pto.vmi.group_store %ysum, %out[%group_off], %c1 {num_groups = 8}
 ```
@@ -1143,7 +1152,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum, %ysum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -1279,7 +1288,7 @@ Assigned layouts:
   !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
 
 %sum:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -1359,7 +1368,7 @@ VMI input:
 %rhs = pto.vmi.group_slot_load %rhs_base[%rhs_off], %c1 {num_groups = 8}
   : !pto.ptr<f32, ub> -> !pto.vmi.vreg<512xf32>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
-%outv = pto.vmi.addf %sum, %rhs
+%outv = pto.vmi.vadd %sum, %rhs
 %c8 = arith.constant 8 : index
 pto.vmi.group_store %outv, %out[%group_off], %c8 {num_groups = 8}
 ```
@@ -1371,7 +1380,7 @@ Assigned layouts:
   !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
 
 %sum, %rhs, %outv:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -1460,7 +1469,7 @@ VMI input:
   : memref<512xf32> -> !pto.vmi.vreg<512xf32>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
 %b = pto.vmi.group_broadcast %sum {num_groups = 8}
-%y = pto.vmi.mulf %x, %b
+%y = pto.vmi.vmul %x, %b
 %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8}
 %c8 = arith.constant 8 : index
 pto.vmi.group_store %ysum, %out[%group_off], %c8 {num_groups = 8}
@@ -1473,7 +1482,7 @@ Assigned layouts:
   !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
 
 %sum, %ysum:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -1723,7 +1732,7 @@ VMI input:
   : memref<256xf32> -> !pto.vmi.vreg<256xf32>
 %bias = pto.vmi.broadcast %bias_s
   : f32 -> !pto.vmi.vreg<256xf32>
-%x = pto.vmi.addf %a, %bias
+%x = pto.vmi.vadd %a, %bias
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
 pto.vmi.group_store %sum, %out[%group_off], %c1 {num_groups = 8}
 ```
@@ -1735,7 +1744,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for one full `8x32xf32` tile:
@@ -1811,7 +1820,7 @@ Assigned layouts:
   !pto.vmi.vreg<384xf32, #pto.vmi.layout<contiguous>>
 
 %sum:
-  !pto.vmi.vreg<384xf32, #pto.vmi.layout<num_groups = 6, slots = 1>>
+  !pto.vmi.vreg<6xf32, #pto.vmi.layout<num_groups = 6, slots = 1>>
 ```
 
 VPTO lowering result:
@@ -1858,7 +1867,7 @@ Assigned layout requested by the consumer:
   !pto.vmi.vreg<192xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<192xf32, #pto.vmi.layout<num_groups = 6, slots = 8>>
+  !pto.vmi.vreg<6xf32, #pto.vmi.layout<num_groups = 6, slots = 8>>
 ```
 
 Required diagnostic when the source does not carry a full-tile-readable
@@ -1905,7 +1914,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for the join:
@@ -1978,9 +1987,9 @@ VMI-LAYOUT-CONTRACT:
 
 ### 3.13 Packed Group-Slot `f32 -> f16` Cast
 
-This case is intentionally illegal for the current S=16/S=32 packed
-group-slot layout. It prevents the compiler from treating a width-changing
-`vcvt` as if it preserved low-lane group slots.
+This cast uses the registered `gs(8) -> gs(8, 2)` relation. A width-changing
+`vcvt` preserves the logical groups by placing the f16 results in even
+halfword lanes; it does not produce consecutive f16 slots.
 
 VMI input:
 
@@ -1992,7 +2001,7 @@ VMI input:
 pto.vmi.group_store %sum16, %out[%group_off], %c1 {num_groups = 8}
 ```
 
-Assigned layouts before the illegal cast:
+Assigned layouts:
 
 ```text
 %x:
@@ -2000,22 +2009,19 @@ Assigned layouts before the illegal cast:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum32:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+
+%sum16:
+  !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
 ```
 
-Required diagnostic:
-
-```text
-VMI-LAYOUT-CONTRACT:
-  pto.vmi.truncf cannot lower from
-  #pto.vmi.layout<num_groups = 8, slots = 8> f32 to f16 because no
-  slot-preserving width-changing VPTO support exists. f32->f16 vcvt writes
-  even/odd sub-lanes, not lanes 0..7. Use group_broadcast before truncf, or
-  keep the group_store element type as f32.
-```
-
-This does not contradict section 3.8. Section 3.8 is legal because the cast is
-commuted after `group_broadcast`, where the value is dense again.
+The consumer uses the strided result through a supported store/broadcast
+relation or an explicit layout conversion. In particular, normal consecutive
+storage must not read halfword lanes `0..7` as eight logical group values.
+This floating-point cast and native 16-bit integer sum have the same slot
+spacing for different reasons: conversion selects halfwords in this case,
+whereas integer `vcgadd` produces widened sums. Section 3.48 describes the
+integer producer contract.
 
 ### 3.14 Unsupported Group Size
 
@@ -2136,7 +2142,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %x32_for_store:
   pto.vmi.ensure_layout %x32
@@ -2359,7 +2365,7 @@ Assigned layout:
 
 ```text
 %rhs:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -2411,7 +2417,7 @@ Assigned layout:
 
 ```text
 %rhs:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering result:
@@ -2480,7 +2486,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %b_dense:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
@@ -2582,7 +2588,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %x for dense store:
   requires #pto.vmi.layout<contiguous>
@@ -2704,7 +2710,7 @@ Assigned layouts:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
 
 %sum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %h:
   !pto.vmi.vreg<128xf16, #pto.vmi.layout<contiguous>>
@@ -2789,7 +2795,7 @@ Assigned layouts before the conflicting `truncf` use:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 The reduction path is legal and uses the same `vsldb` block-load shape as
@@ -2833,7 +2839,7 @@ VMI input:
 }
 %bias = pto.vmi.group_slot_load %bias_base[%bias_off], %c1 {num_groups = 8}
   : !pto.ptr<f32, ub>, index -> !pto.vmi.vreg<128xf32>
-%outv = pto.vmi.addf %sum, %bias
+%outv = pto.vmi.vadd %sum, %bias
 pto.vmi.group_store %outv, %out[%group_off], %c1 {num_groups = 8}
 ```
 
@@ -2845,7 +2851,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %a, %b, %sum, %bias, %outv:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for the join:
@@ -2929,7 +2935,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
-  !pto.vmi.vreg<192xf32, #pto.vmi.layout<num_groups = 6, slots = 8>>
+  !pto.vmi.vreg<6xf32, #pto.vmi.layout<num_groups = 6, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -3010,7 +3016,7 @@ VMI input:
     iter_args(%arg = %init) -> !pto.vmi.vreg<256xf32> {
   %bias = pto.vmi.broadcast %bias_s
     : f32 -> !pto.vmi.vreg<256xf32>
-  %next = pto.vmi.addf %arg, %bias
+  %next = pto.vmi.vadd %arg, %bias
   scf.yield %next : !pto.vmi.vreg<256xf32>
 }
 %sum = pto.vmi.group_reduce_addf %acc, %mask {num_groups = 8}
@@ -3024,7 +3030,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -3102,7 +3108,7 @@ VMI input:
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
 
 %b_for_mul = pto.vmi.group_broadcast %sum {num_groups = 8}
-%y = pto.vmi.mulf %x, %b_for_mul
+%y = pto.vmi.vmul %x, %b_for_mul
 %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8}
 pto.vmi.group_store %ysum, %sum_out[%group_off], %c1 {num_groups = 8}
 
@@ -3122,7 +3128,7 @@ Assigned layouts in the current implementation:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum, %ysum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %b_for_mul, %y:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
@@ -3236,7 +3242,7 @@ VMI input:
   : memref<64xf32> -> !pto.vmi.vreg<64xf32>
 %mask = pto.vmi.create_mask %c48
   : index -> !pto.vmi.mask<64xpred>
-%sum = pto.vmi.addf %x, %rhs
+%sum = pto.vmi.vadd %x, %rhs
 %passthrough = pto.vmi.select %mask, %sum, %x
 pto.vmi.store %passthrough, %dense_out[%off]
 pto.vmi.masked_store %sum, %masked_out[%off], %mask
@@ -3322,7 +3328,7 @@ Assigned layouts:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for the function boundary:
@@ -3431,7 +3437,7 @@ VMI input:
   : index -> !pto.vmi.mask<128xpred>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
 %b = pto.vmi.group_broadcast %sum {num_groups = 8}
-%y = pto.vmi.mulf %x, %b
+%y = pto.vmi.vmul %x, %b
 %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8}
 pto.vmi.group_store %ysum, %out[%group_off], %c1 {num_groups = 8}
 ```
@@ -3448,7 +3454,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum, %ysum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for one `8x16xf32` tile:
@@ -3546,7 +3552,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -3640,7 +3646,7 @@ Assigned layout:
 
 ```text
 %rhs:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering result:
@@ -3928,7 +3934,7 @@ Assigned layouts:
   !pto.vmi.mask<128xb32, #pto.vmi.layout<deinterleaved = 2>>
 
 %sum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -4014,7 +4020,7 @@ Assigned layouts:
   !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %x8:
   !pto.vmi.vreg<256xf8, #pto.vmi.layout<contiguous>>
@@ -4142,7 +4148,7 @@ Assigned layouts after rematerializing the load:
   !pto.vmi.mask<256xpred, #pto.vmi.layout<deinterleaved = 2>>
 
 %sum16:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 16, slots = 8>>
+  !pto.vmi.vreg<16xf32, #pto.vmi.layout<num_groups = 16, slots = 8>>
 
 %x_s32:
   !pto.vmi.vreg<256xf32, #pto.vmi.layout<deinterleaved = 4>>
@@ -4151,7 +4157,7 @@ Assigned layouts after rematerializing the load:
   !pto.vmi.mask<256xpred, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum32:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -4256,10 +4262,10 @@ Assigned layouts:
   !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
 
 %sum32:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 
 %sum16:
-  !pto.vmi.vreg<512xf16, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf16, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering result for one full 8-row tile:
@@ -4320,7 +4326,7 @@ VMI input:
 pto.vmi.group_store %sum, %sum_out[%group_off], %c1 {num_groups = 8}
 
 %b = pto.vmi.group_broadcast %sum {num_groups = 8}
-%y = pto.vmi.mulf %x, %b
+%y = pto.vmi.vmul %x, %b
 %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8}
 pto.vmi.group_store %ysum, %out[%group_off], %c1 {num_groups = 8}
 ```
@@ -4340,7 +4346,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=2>>
 
 %sum, %ysum:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %b, %y:
   !pto.vmi.vreg<128xf32, #pto.vmi.layout<contiguous>>
@@ -4440,7 +4446,7 @@ VMI input:
 %x16 = pto.vmi.load %base16[%off16]
   : memref<128xf32> -> !pto.vmi.vreg<128xf32>
 %sum16 = pto.vmi.group_reduce_addf %x16, %mask16 {num_groups = 8}
-%out16v = pto.vmi.addf %sum16, %rhs16
+%out16v = pto.vmi.vadd %sum16, %rhs16
 pto.vmi.group_store %out16v, %out16[%group_off16], %c1 {num_groups = 8}
 
 %rhs64 = pto.vmi.group_slot_load %rhs_base[%rhs_off], %c1 {num_groups = 8}
@@ -4448,7 +4454,7 @@ pto.vmi.group_store %out16v, %out16[%group_off16], %c1 {num_groups = 8}
 %x64 = pto.vmi.load %base64[%off64]
   : memref<512xf32> -> !pto.vmi.vreg<512xf32>
 %sum64 = pto.vmi.group_reduce_addf %x64, %mask64 {num_groups = 8}
-%out64v = pto.vmi.addf %sum64, %rhs64
+%out64v = pto.vmi.vadd %sum64, %rhs64
 pto.vmi.group_store %out64v, %out64[%group_off64], %c1 {num_groups = 8}
 ```
 
@@ -4456,13 +4462,13 @@ Assigned layouts:
 
 ```text
 %rhs16, %sum16, %out16v:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %x16, %mask16:
   #pto.vmi.layout<block_deinterleaved=2>
 
 %rhs64, %sum64, %out64v:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 
 %x64, %mask64:
   #pto.vmi.layout<contiguous>
@@ -4545,7 +4551,7 @@ Assigned layouts:
   !pto.vmi.vreg<512xf32, #pto.vmi.layout<contiguous>>
 
 %sum:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering result:
@@ -4607,7 +4613,7 @@ Assigned layouts:
     #pto.vmi.layout<deinterleaved=4>>
 
 %sum:
-  !pto.vmi.vreg<512xf32, #pto.vmi.layout<num_groups = 16, slots = 8>>
+  !pto.vmi.vreg<16xf32, #pto.vmi.layout<num_groups = 16, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -4678,7 +4684,7 @@ VMI input:
   : index -> !pto.vmi.mask<256xpred>
 %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
 %b = pto.vmi.group_broadcast %sum {num_groups = 8}
-%y = pto.vmi.mulf %x, %b
+%y = pto.vmi.vmul %x, %b
 %ysum = pto.vmi.group_reduce_addf %y, %mask {num_groups = 8}
 pto.vmi.group_store %ysum, %out[%group_off], %c1 {num_groups = 8}
 ```
@@ -4691,7 +4697,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum, %ysum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -4724,7 +4730,7 @@ VPTO lowering result:
 
 // Materialize the same per-row scalar into every 32B row fragment.  The four
 // bundle entries have the same lane contents, but the result layout remains
-// block_deinterleaved=4 because the consumer `%y = mulf %x, %b`
+// block_deinterleaved=4 because the consumer `%y = vmul %x, %b`
 // operates on the block-fragment layout.
 %b_p0 = pto.vselr %sum_block, %broadcast_idx
   : !pto.vreg<64xf32>, !pto.vreg<64xi32> -> !pto.vreg<64xf32>
@@ -4788,12 +4794,12 @@ VMI input:
 %x = pto.vmi.load %base[%off]
   : memref<256xf32> -> !pto.vmi.vreg<256xf32>
 
-%copy = pto.vmi.addf %x, %scale
+%copy = pto.vmi.vadd %x, %scale
 pto.vmi.store %copy, %copy_out[%off]
 
 %mask = pto.vmi.create_group_mask %c32 {num_groups = 8, group_size = 32}
   : index -> !pto.vmi.mask<256xpred>
-%prod = pto.vmi.mulf %x, %scale
+%prod = pto.vmi.vmul %x, %scale
 %sum = pto.vmi.group_reduce_addf %prod, %mask {num_groups = 8}
 pto.vmi.group_store %sum, %sum_out[%group_off], %c1 {num_groups = 8}
 ```
@@ -4814,7 +4820,7 @@ Assigned layouts:
     #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -4946,7 +4952,7 @@ Assigned layouts:
  -> #pto.vmi.layout<deinterleaved = 4>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result:
@@ -5038,7 +5044,7 @@ VMI input:
   %mask = pto.vmi.create_group_mask %c16 {num_groups = 8, group_size = 16}
     : index -> !pto.vmi.mask<128xpred>
   %sum = pto.vmi.group_reduce_addf %x, %mask {num_groups = 8}
-  %next = pto.vmi.addf %arg, %sum
+  %next = pto.vmi.vadd %arg, %sum
   scf.yield %next : !pto.vmi.vreg<128xf32>
 }
 
@@ -5049,7 +5055,7 @@ Assigned layouts:
 
 ```text
 %acc0, %arg, %sum, %next, %acc:
-  !pto.vmi.vreg<128xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 
 %x:
   !pto.vmi.vreg<128xf32,
@@ -5164,7 +5170,7 @@ inside @consume:
   !pto.vmi.mask<256xpred, #pto.vmi.layout<contiguous>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering result for the function boundary:
@@ -5312,7 +5318,7 @@ Assigned layouts:
          #pto.vmi.layout<block_deinterleaved=4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 Lowering:
@@ -5480,7 +5486,7 @@ VMI input:
 
 %w = pto.vmi.extf %a
   : !pto.vmi.vreg<128xf16> -> !pto.vmi.vreg<128xf32>
-%t1 = pto.vmi.mulf %w, %k
+%t1 = pto.vmi.vmul %w, %k
   : !pto.vmi.vreg<128xf32>, !pto.vmi.vreg<128xf32>
     -> !pto.vmi.vreg<128xf32>
 
@@ -5583,14 +5589,15 @@ to decide this.
 
 ### 3.47 Type-Parametric Group Reduce Rule
 
-The group-reduce layout rule is parameterized by the element width, not by f32
-case names.
+The group-reduce layout rule is parameterized by operation kind and element
+width. Equal input widths do not imply equal result slot spacing.
 
 ```text
 E          = sizeof(T)
 VLaneElems = 32B / E
 L          = 256B / E
 S          = logical_lane_count / num_groups
+R          = 2 for native 16-bit integer addition, otherwise 1
 ```
 
 The canonical grouped-reduce layouts are:
@@ -5604,15 +5611,15 @@ Packed group-slot rule:
 
 S == VLaneElems:
   source/mask layout = contiguous
-  result layout      = group_slots(num_groups=G, slots=8)
+  result layout      = group_slots(num_groups=G, slots=8, lane_stride=R)
 
 S == 2 * VLaneElems:
   source/mask layout = deinterleaved=2
-  result layout      = group_slots(num_groups=G, slots=8)
+  result layout      = group_slots(num_groups=G, slots=8, lane_stride=R)
 
 S == 4 * VLaneElems:
   source/mask layout = deinterleaved=4
-  result layout      = group_slots(num_groups=G, slots=8)
+  result layout      = group_slots(num_groups=G, slots=8, lane_stride=R)
 
 S >= L && S % L == 0:
   source/mask layout = contiguous
@@ -5628,7 +5635,7 @@ i32   8           64   S=8, S=16, S=32           S=64, S=128, ...
 f16   16          128  S=16, S=32, S=64          S=128, S=256, ...
 i16   16          128  S=16, S=32, S=64          S=128, S=256, ...
 f8    32          256  cast to f32 before grouped reduce
-i8    32          256  S=32, S=64, S=128          S=256, S=512, ...
+i8    32          256  no native A5 form; bounded internal-extension fallback
 ```
 
 These non-f32 cases are part of the type-generic layout/lowering design.  If a
@@ -5637,172 +5644,109 @@ accepts it, assignment must use the same `VLaneElems/L/S` formula instead of
 adding per-type shape special cases.  Any f32-only behavior in the current
 implementation is staged implementation status, not the intended design limit.
 For the current baseline, `f8` remains a storage and cast-boundary type for
-group reduction. Integer `i8/i16/i32` grouped reductions are direct VMI
-operations when their group shape matches a registered table row.
+group reduction. Integer `i16/i32` grouped reductions use native operations
+when their group shape matches a registered table row. A5 has no native i8
+row or VCG reduction; see section 3.55 for the logical i8 fallback.
 
 ### 3.48 16-bit Typed Group Reduce, `S = VLaneElems = 16`
 
-This case covers both `f16` and `i16`. The element width is the same, so the
-layout and VPTO instruction skeleton are identical. The VMI op name carries the
-semantic difference:
+For `N=128, G=8`, both f16 and 16-bit integer sums use one native `vcgadd`.
+Their result layouts differ:
 
-```text
-f16: pto.vmi.group_reduce_addf ... {reassoc}
-i16: pto.vmi.group_reduce_addi ...
+| Value | Assigned layout |
+|---|---|
+| Source and mask | `contiguous` |
+| f16 sum | `8xf16`, `group_slots(G=8, slots=8, lane_stride=1)` |
+| i16/si16/ui16 sum | `8xT`, `group_slots(G=8, slots=8, lane_stride=2)` |
+
+The logical result has `G` elements, not `N`. The following unsigned example
+shows the physical producer; signed and signless inputs use the same slot
+positions. The VPTO result keeps the input-shaped register type, and the VMI
+layout interprets only its even halfword lanes as logical values.
+
+```mlir
+func.func @native_ui16_one_block(%x: !pto.vreg<128xui16>, %mask: !pto.mask<b16>) -> !pto.vreg<128xui16> {
+  %sum = pto.vcgadd %x, %mask : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+  return %sum : !pto.vreg<128xui16>
+}
 ```
 
-VMI-shaped input:
+A normal 16-bit store of these eight logical values requests consecutive
+slots. The conversion belongs to that consumer:
 
-```text
-// Floating form.
-%xf = pto.vmi.load %base_f16[%off]
-  : memref<128xf16> -> !pto.vmi.vreg<128xf16>
-%mf = pto.vmi.create_group_mask %c16 {num_groups = 8, group_size = 16}
-  : index -> !pto.vmi.mask<128xpred>
-%sumf = pto.vmi.group_reduce_addf %xf, %mf {num_groups = 8, reassoc}
-pto.vmi.group_store %sumf, %out_f16[%group_off], %c1 {num_groups = 8}
-
-// Integer form.
-%xi = pto.vmi.load %base_i16[%off]
-  : memref<128xi16> -> !pto.vmi.vreg<128xi16>
-%mi = pto.vmi.create_group_mask %c16 {num_groups = 8, group_size = 16}
-  : index -> !pto.vmi.mask<128xpred>
-%sumi = pto.vmi.group_reduce_addi %xi, %mi {num_groups = 8}
-pto.vmi.group_store %sumi, %out_i16[%group_off], %c1 {num_groups = 8}
+```mlir
+func.func @store_ui16_group_slots(%sum: !pto.vreg<128xui16>, %out: !pto.ptr<ui16, ub>, %off: index) {
+  %wide = pto.vbitcast %sum : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+  %packed = pto.vpack %wide, "LOWER" : !pto.vreg<64xui32> -> !pto.vreg<128xui16>
+  %slots = pto.pset_b16 "PAT_VL8" : !pto.mask<b16>
+  pto.vsts %packed, %out[%off], %slots {dist = "NORM_B16"} : !pto.vreg<128xui16>, !pto.ptr<ui16, ub>, !pto.mask<b16>
+  return
+}
 ```
 
-Assigned layouts:
-
-```text
-%xf, %mf, %xi, %mi:
-  #pto.vmi.layout<contiguous>
-
-%sumf:
-  !pto.vmi.vreg<128xf16, #pto.vmi.layout<num_groups = 8, slots = 8>>
-
-%sumi:
-  !pto.vmi.vreg<128xi16, #pto.vmi.layout<num_groups = 8, slots = 8>>
-```
-
-VPTO lowering shape:
-
-```text
-%x0 = pto.vlds %base[%off] {dist = "NORM"}
-  : !pto.ptr<T16, ub> -> !pto.vreg<128xT16>
-
-%all_b16 = pto.pge_b16 "PAT_ALL"
-%slot8_b16 = pto.pge_b16 "PAT_VL8"
-
-%sum0 = pto.vcgadd %x0, %all_b16
-  : !pto.vreg<128xT16>, !pto.mask<b16> -> !pto.vreg<128xT16>
-
-pto.vsts %sum0, %out[%group_off], %slot8_b16 {dist = "NORM_B16"}
-  : !pto.vreg<128xT16>, !pto.ptr<T16, ub>, !pto.mask<b16>
-```
-
-Memory result:
-
-```text
-for r = 0..7:
-  out[group_off + r] = reduce_T16(base[off + r * 16 + 0 .. 15])
-```
+The f16 producer already has consecutive slots and can feed that type's
+normal store directly. A 16-to-32 integer extension uses `vcvt EVEN` on the
+native integer result; a supported broadcast uses its stride when constructing
+selector indices. Neither consumer requires the above store conversion.
 
 ### 3.49 16-bit Typed Group Reduce, `S = 2 * VLaneElems = 32`
 
-This case covers both `f16` and `i16`. Each logical row is 64B and must be
-split into two 32B VLane fragments before `vcgadd`.
+For `N=256, G=8`, each logical row spans two 32B VLane fragments. Source and
+mask use `deinterleaved=2` (or a compatible `block_deinterleaved=2` fact).
+The result has eight logical elements: f16 uses `gs(8)`, while 16-bit integer
+addition uses `gs(8,2)`.
 
-VMI-shaped input:
+For f16, two `vcgadd` results are combined with an f16 `vadd` and a `b16`
+`PAT_VL8` predicate. Integer sums occupy 32-bit lanes, so the combine uses
+32-bit values and `b32 PAT_VL8`:
 
-```text
-%x = pto.vmi.load %base[%off]
-  : memref<256xT16> -> !pto.vmi.vreg<256xT16>
-%mask = pto.vmi.create_group_mask %c32 {num_groups = 8, group_size = 32}
-  : index -> !pto.vmi.mask<256xpred>
-%sum = pto.vmi.group_reduce_add{f|i} %x, %mask {num_groups = 8}
-pto.vmi.group_store %sum, %out[%group_off], %c1 {num_groups = 8}
+```mlir
+func.func @native_ui16_two_blocks(%x0: !pto.vreg<128xui16>, %x1: !pto.vreg<128xui16>, %m0: !pto.mask<b16>, %m1: !pto.mask<b16>) -> !pto.vreg<128xui16> {
+  %slots = pto.pset_b32 "PAT_VL8" : !pto.mask<b32>
+  %s0 = pto.vcgadd %x0, %m0 : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+  %s1 = pto.vcgadd %x1, %m1 : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+  %w0 = pto.vbitcast %s0 : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+  %w1 = pto.vbitcast %s1 : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+  %wide = pto.vadd %w0, %w1, %slots : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+  %sum = pto.vbitcast %wide : !pto.vreg<64xui32> -> !pto.vreg<128xui16>
+  return %sum : !pto.vreg<128xui16>
+}
 ```
 
-Assigned layouts:
-
-```text
-%x, %mask:
-  #pto.vmi.layout<deinterleaved = 2>
-
-%sum:
-  !pto.vmi.vreg<256xT16, #pto.vmi.layout<num_groups = 8, slots = 8>>
-```
-
-VPTO lowering shape:
-
-```text
-%x_p0, %x_p1 = pto.vldsx2 %base[%off], "DINTLV_B16"
-  : !pto.ptr<T16, ub>, index -> !pto.vreg<128xT16>, !pto.vreg<128xT16>
-
-%all_b16 = pto.pge_b16 "PAT_ALL"
-%slot8_b16 = pto.pge_b16 "PAT_VL8"
-
-%s0 = pto.vcgadd %x_p0, %all_b16
-  : !pto.vreg<128xT16>, !pto.mask<b16> -> !pto.vreg<128xT16>
-%s1 = pto.vcgadd %x_p1, %all_b16
-  : !pto.vreg<128xT16>, !pto.mask<b16> -> !pto.vreg<128xT16>
-%sum0 = pto.vadd %s0, %s1, %slot8_b16
-  : !pto.vreg<128xT16>, !pto.vreg<128xT16>, !pto.mask<b16>
-    -> !pto.vreg<128xT16>
-
-pto.vsts %sum0, %out[%group_off], %slot8_b16 {dist = "NORM_B16"}
-  : !pto.vreg<128xT16>, !pto.ptr<T16, ub>, !pto.mask<b16>
-```
-
-Memory result:
-
-```text
-for r = 0..7:
-  out[group_off + r] = reduce_T16(base[off + r * 32 + 0 .. 31])
-```
+The returned register still represents `gs(8,2)`; the bitcast moves no bits.
+A direct 16-bit store can use the consumer conversion in section 3.48 once,
+after the partial sums have been combined.
 
 ### 3.50 16-bit Typed Group Reduce, `S = 4 * VLaneElems = 64`
 
-This is the four-fragment packed case for both `f16` and `i16`.
+For `N=512, G=8`, source and mask use `deinterleaved=4` or a compatible
+`block_deinterleaved=4` fact. Four native partial results form a pairwise tree.
+The f16 path uses f16 adds with `b16 PAT_VL8`; the integer path uses 32-bit
+adds with `b32 PAT_VL8`, returning eight logical 16-bit values as `gs(8,2)`:
 
-Assigned layouts:
-
-```text
-%x, %mask:
-  #pto.vmi.layout<deinterleaved = 4>
-
-%sum:
-  !pto.vmi.vreg<512xT16, #pto.vmi.layout<num_groups = 8, slots = 8>>
+```mlir
+func.func @native_ui16_four_blocks(%x0: !pto.vreg<128xui16>, %x1: !pto.vreg<128xui16>, %x2: !pto.vreg<128xui16>, %x3: !pto.vreg<128xui16>, %m0: !pto.mask<b16>, %m1: !pto.mask<b16>, %m2: !pto.mask<b16>, %m3: !pto.mask<b16>) -> !pto.vreg<128xui16> {
+  %slots = pto.pset_b32 "PAT_VL8" : !pto.mask<b32>
+  %s0 = pto.vcgadd %x0, %m0 : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+  %s1 = pto.vcgadd %x1, %m1 : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+  %s2 = pto.vcgadd %x2, %m2 : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+  %s3 = pto.vcgadd %x3, %m3 : !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+  %w0 = pto.vbitcast %s0 : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+  %w1 = pto.vbitcast %s1 : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+  %w2 = pto.vbitcast %s2 : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+  %w3 = pto.vbitcast %s3 : !pto.vreg<128xui16> -> !pto.vreg<64xui32>
+  %s01 = pto.vadd %w0, %w1, %slots : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+  %s23 = pto.vadd %w2, %w3, %slots : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+  %wide = pto.vadd %s01, %s23, %slots : !pto.vreg<64xui32>, !pto.vreg<64xui32>, !pto.mask<b32> -> !pto.vreg<64xui32>
+  %sum = pto.vbitcast %wide : !pto.vreg<64xui32> -> !pto.vreg<128xui16>
+  return %sum : !pto.vreg<128xui16>
+}
 ```
 
-VPTO lowering shape:
-
-```text
-%x_p0, %x_p1, %x_p2, %x_p3 = materialize deinterleaved=4 input
-  : four !pto.vreg<128xT16>
-
-%all_b16 = pto.pge_b16 "PAT_ALL"
-%slot8_b16 = pto.pge_b16 "PAT_VL8"
-
-%s0 = pto.vcgadd %x_p0, %all_b16 : !pto.vreg<128xT16>
-%s1 = pto.vcgadd %x_p1, %all_b16 : !pto.vreg<128xT16>
-%s2 = pto.vcgadd %x_p2, %all_b16 : !pto.vreg<128xT16>
-%s3 = pto.vcgadd %x_p3, %all_b16 : !pto.vreg<128xT16>
-
-%s01 = pto.vadd %s0, %s1, %slot8_b16 : !pto.vreg<128xT16>
-%s23 = pto.vadd %s2, %s3, %slot8_b16 : !pto.vreg<128xT16>
-%sum0 = pto.vadd %s01, %s23, %slot8_b16 : !pto.vreg<128xT16>
-
-pto.vsts %sum0, %out[%group_off], %slot8_b16 {dist = "NORM_B16"}
-  : !pto.vreg<128xT16>, !pto.ptr<T16, ub>, !pto.mask<b16>
-```
-
-Memory result:
-
-```text
-for r = 0..7:
-  out[group_off + r] = reduce_T16(base[off + r * 64 + 0 .. 63])
-```
+These producer paths contain no `vpack`. Integer sums wrap at the logical
+16-bit width when their low halfwords are consumed. Extending such a value
+must extend those low halfwords, not forward the untruncated hardware sum.
+For example, `ui16(65535+1)` extends to `ui32(0)`.
 
 #### 3.50.1 Partial Packed `S = 64` Reductions
 
@@ -5814,7 +5758,7 @@ chunk contains eight valid group results.
 The result layout remains:
 
 ```text
-!pto.vmi.vreg<(G * 64)xf16, #pto.vmi.layout<num_groups = G, slots = 8>>
+!pto.vmi.vreg<Gxf16, #pto.vmi.layout<num_groups = G, slots = 8>>
 ```
 
 The lowering computes per result chunk:
@@ -5859,7 +5803,7 @@ Assigned layouts:
   #pto.vmi.layout<block_deinterleaved=4>
 
 %sum:
-  !pto.vmi.vreg<256xf16, #pto.vmi.layout<num_groups = 4, slots = 8>>
+  !pto.vmi.vreg<4xf16, #pto.vmi.layout<num_groups = 4, slots = 8>>
 ```
 
 VPTO lowering shape for the only result chunk:
@@ -5976,7 +5920,7 @@ Assigned layouts:
   #pto.vmi.layout<contiguous>
 
 %sum:
-  !pto.vmi.vreg<1024xT16, #pto.vmi.layout<num_groups = 8, slots = 1>>
+  !pto.vmi.vreg<8xT16, #pto.vmi.layout<num_groups = 8, slots = 1>>
 ```
 
 VPTO lowering shape:
@@ -6023,7 +5967,7 @@ Example for `S = 2 * VLaneElems = 16`:
   !pto.vmi.vreg<128xT32, #pto.vmi.layout<deinterleaved = 2>>
 
 %sum:
-  !pto.vmi.vreg<128xT32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xT32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering shape:
@@ -6132,7 +6076,7 @@ Assigned layouts:
   !pto.vmi.mask<256xb32, #pto.vmi.layout<deinterleaved = 4>>
 
 %sum:
-  !pto.vmi.vreg<256xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
+  !pto.vmi.vreg<8xf32, #pto.vmi.layout<num_groups = 8, slots = 8>>
 ```
 
 VPTO lowering shape:
@@ -6184,58 +6128,21 @@ pto.vmi.group_reduce_addf %x8, %mask
 
 ### 3.55 8-bit Integer Group Reduce
 
-The target exposes same-type i8 `vcgadd` for 32B-block group classes and a
-widening i8-to-i16 `vcadd` for full-row reduction. VMI keeps a same-type i8
-contract in both cases:
+Direct `i8`, `si8`, and `ui8` inputs to VMI integer reductions are rejected
+before layout assignment, including singleton groups. There is no native or
+implicit-widening fallback. Direct micro `pto.vcadd` also rejects 8-bit integer
+inputs in its verifier.
 
 ```text
-i8 source -> group_reduce_addi -> i8 group-slot result
+i8 source -> group_reduce_addi
+  -> VMI-UNSUPPORTED: 8-bit integer reductions are not supported
 ```
 
-Packed 32B-block example:
-
-```text
-%x8 = pto.vmi.load %base_i8[%off]
-  : memref<256xi8> -> !pto.vmi.vreg<256xi8>
-%mask = pto.vmi.create_group_mask %c32 {num_groups = 8, group_size = 32}
-  : index -> !pto.vmi.mask<256xpred>
-%sum = pto.vmi.group_reduce_addi %x8, %mask {num_groups = 8}
-pto.vmi.group_store %sum, %out_i8[%group_off], %c1 {num_groups = 8}
-```
-
-Assigned layouts:
-
-```text
-%x8, %mask:
-  #pto.vmi.layout<contiguous>
-
-%sum:
-  !pto.vmi.vreg<8xi8, #pto.vmi.layout<num_groups = 8, slots = 8>>
-```
-
-VPTO lowering shape:
-
-```text
-%all_b8 = pto.pge_b8 "PAT_ALL"
-%slot8_b8 = pto.pge_b8 "PAT_VL8"
-%sum0 = pto.vcgadd %x8, %all_b8
-  : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<256xi8>
-pto.vsts %sum0, %out_i8[%group_off], %slot8_b8 {dist = "NORM_B8"}
-```
-
-For an aligned full row (`S = 256`), lowering uses widening only internally:
-
-```text
-%wide = pto.vcadd %x8, %all_b8
-  : !pto.vreg<256xi8>, !pto.mask<b8> -> !pto.vreg<128xi16>
-%sum_i8 = pto.vbitcast %wide
-  : !pto.vreg<128xi16> -> !pto.vreg<256xi8>
-```
-
-The low i8 lane contains the same-type wraparound result. Explicit
-`extsi`/`extui` before reduction remains available when the algorithm itself
-requires a wider accumulator, but widening is not required by the direct i8
-group-reduce contract.
+Callers must explicitly use `extsi` or `extui` to convert to a supported 16-bit
+or 32-bit source before reduction. The reduction then follows the wider type's
+identities and result-width semantics; truncation does not restore the original
+8-bit empty min/max identity automatically. See [Reduce](../isa/vmi-isa/05-reduce.md)
+for the supported shapes and explicit conversion paths.
 
 ### 3.56 Full 256-Bin Distribution Histogram
 

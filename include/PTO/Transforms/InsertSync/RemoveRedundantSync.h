@@ -38,6 +38,9 @@ private:
   SyncAnalysisMode syncAnalysisMode_;
  
 private:
+  // Slot-aware transitive coverage in bounded, straight rotation loops.
+  void RemoveSlotRedundantSync();
+
   /// 检查某对同步 (set/wait) 是否被其他同步覆盖（从而变得多余）
   bool CheckAllSync(const SyncOperation *setFlag, const SyncOperation *waitFlag);
 
@@ -54,12 +57,11 @@ private:
                           unsigned &i);
 
   /// 处理 Loop 结构中的冗余检查 (当前实现较为保守)
-  bool CheckLoopBetween(LoopInstanceElement *loopElement,
-                        const SyncOperation *setFlag, unsigned &i);
+  bool CheckLoopBetween(LoopInstanceElement *loopElement, unsigned &i) const;
 
   /// 核心判断逻辑：检查遇到的 relatedSync 是否能构成对 setFlag 的覆盖
   bool CanMatchedSync(SmallVector<bool> &syncFinder, SyncOperation *relatedSync,
-                      const SyncOperation *setFlag);
+                      const SyncOperation *setFlag) const;
 };
  
 } // namespace pto

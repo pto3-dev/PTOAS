@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,97 +6,28 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Core PTODSL ops: constants, structs, and pointer arithmetic."""
 
-from functools import wraps
-import warnings
-from ._diagnostics import (
-    PTODSLDeprecationWarning,
-    explicit_mode_required_with_context_error,
-    make_tensor_view_invalid_layout_error,
-    make_tensor_view_missing_metadata_error,
-    tile_row_alignment_error,
-)
-from ._host_tensors import resolve_tensor_data_entry
-from ._scalar_coercion import coerce_scalar_to_type, materialize_scalar_literal
-from ._scalar_adaptation import (
-    classify_runtime_scalar_type,
-    coerce_runtime_i1_value,
-    coerce_runtime_index_value,
-    coerce_runtime_integer_value,
-)
-from ._runtime_scalar_ops import emit_runtime_binary_op
-from ._surface_values import (
-    AllocatedBufferValue,
-    MaskResultValue,
-    PartitionTensorViewValue,
-    TensorViewValue,
-    TileSliceValue,
-    TileValue,
-    _coerce_index_value,
-    _static_index_dims,
-    _unwrap_sequence,
-    compose_partition_spec,
-    emit_as_ptr,
-    infer_tile_element_type,
-    is_runtime_scalar_ir_type,
-    parse_tile_type_metadata,
-    resolve_address_access,
-    unwrap_surface_value,
-    wrap_surface_value,
-)
-from ._types import (
-    _is_struct_type,
-    _isinstance_pto_type,
-    _materialize_integer_literal,
-    _normalize_address_space,
-    _resolve,
-    _strip_integer_signedness,
-    mask_type,
-    part_tensor_view_type,
-    part_tensor_view_type_from_dims,
-    ptr,
-    tensor_view_type,
-    tensor_view_type_from_dims,
-    vreg_type,
-)
-from ptoas.mlir.dialects import arith, pto as _pto
-from ptoas.mlir.ir import (
-    Attribute,
-    BF16Type,
-    F16Type,
-    F32Type,
-    Float8E4M3FNType,
-    Float8E5M2Type,
-    FloatAttr,
-    IndexType,
-    IntegerAttr,
-    IntegerType,
-    MemRefType,
-    Operation,
-    Type,
-    TypeAttr,
-    UnitAttr,
-    VectorType,
-)
+from ._ops_imports import *  # noqa: F401,F403
+
+
 
 
 
 
 def const(value: int, *, dtype=None):
     """
-    Emit an ``arith.constant``.
+    Emit a frontend ``pto.constant``.
 
     ``dtype`` is a ``_DType`` descriptor or a concrete ``ptoas.mlir.ir.Type``.
     Defaults to ``index`` when omitted.
     """
     from ._types import index as _idx_dtype
     mlir_type = _resolve(dtype) if dtype is not None else _resolve(_idx_dtype)
-    if any(cls.isinstance(mlir_type) for cls in (F16Type, BF16Type, F32Type)):
-        return wrap_surface_value(arith.ConstantOp(mlir_type, FloatAttr.get(mlir_type, value)).result)
-    if IntegerType.isinstance(mlir_type):
-        return wrap_surface_value(_materialize_integer_literal(mlir_type, value))
-    return wrap_surface_value(arith.ConstantOp(mlir_type, value).result)
+    return wrap_surface_value(
+        materialize_scalar_literal(value, mlir_type, context="pto.const(...)")
+    )
 
 
 # ── Stack-local structs ──────────────────────────────────────────

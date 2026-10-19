@@ -160,6 +160,24 @@ module {
         -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
     return %sum : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
   }
+
+  func.func @gs8_ls2_to_dense_ls2_i16(
+      %v: !pto.vmi.vreg<8xi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>)
+      -> !pto.vmi.vreg<8xi16, #pto.vmi.layout<contiguous, lane_stride = 2>> {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xi16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+        -> !pto.vmi.vreg<8xi16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+    return %r : !pto.vmi.vreg<8xi16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+  }
+
+  func.func @dense_ls2_to_gs8_ls2_ui16(
+      %v: !pto.vmi.vreg<8xui16, #pto.vmi.layout<contiguous, lane_stride = 2>>)
+      -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>> {
+    %r = pto.vmi.ensure_layout %v
+        : !pto.vmi.vreg<8xui16, #pto.vmi.layout<contiguous, lane_stride = 2>>
+        -> !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+    return %r : !pto.vmi.vreg<8xui16, #pto.vmi.layout<num_groups = 8, slots = 8, lane_stride = 2>>
+  }
 }
 
 // CHECK-LABEL: func.func @gs8_to_gs8_ls2_ui8(
@@ -244,3 +262,14 @@ module {
 // CHECK: pto.vadd %[[LHS]], %[[RHS]], {{.*}} : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
 // CHECK-NOT: !pto.vreg<64xui32>
 // CHECK-NOT: pto.vmi.
+
+// The same-stride packet/dense view is an identity, including the native i16
+// vcgadd result feeding an ls(2) reduction input.
+// CHECK-LABEL: func.func @gs8_ls2_to_dense_ls2_i16(
+// CHECK-SAME: %[[ARG:[^:]+]]: !pto.vreg<128xi16>
+// CHECK-NEXT: return %[[ARG]] : !pto.vreg<128xi16>
+
+
+// CHECK-LABEL: func.func @dense_ls2_to_gs8_ls2_ui16(
+// CHECK-SAME: %[[ARG:[^:]+]]: !pto.vreg<128xui16>
+// CHECK-NEXT: return %[[ARG]] : !pto.vreg<128xui16>

@@ -13,9 +13,11 @@
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedDAGBuilder.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOSchedResourceTracker.h"
 #include "PTO/Transforms/VPTOScheduler/VPTOScheduler.h"
+#include "PTO/Transforms/VPTOScheduler/VPTOSchedulerRematerialization.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
@@ -49,7 +51,8 @@ enum PressureSetID : unsigned {
 class TrackerTestModel final : public VPTOSchedModel {
 public:
   explicit TrackerTestModel(bool trackUnboundedPressure = false,
-                            unsigned predicateLimit = 2)
+                            unsigned predicateLimit = 2,
+                            unsigned vectorLimit = 8)
       : trackUnboundedPressure(trackUnboundedPressure) {
     machine.target = "test";
     machine.version = "tracker-test-v1";
@@ -61,7 +64,7 @@ public:
         {DelayedResource, "delayed", 1, 0, {}},
     };
     pressureSets = {
-        {VectorPressure, "vector", 8, 1, 1},
+        {VectorPressure, "vector", vectorLimit, 1, 1},
         {PredicatePressure, "predicate", predicateLimit, 2, 4},
     };
     if (trackUnboundedPressure) {
@@ -113,6 +116,9 @@ public:
       return {{UnboundedPressure, 1}};
     }
     return {};
+  }
+  bool isCheapToRematerialize(Operation *op) const override {
+    return isa<VdupOp>(op);
   }
 
 private:
@@ -769,6 +775,81 @@ static bool testPressureAwareStrategy(MLIRContext &context) {
          testAtLimitStrategy(model, *fixture->dag, units) &&
          testPressureOverridesLatency(model, *fixture->dag, units) &&
          testClosureAndTieBreakStrategy(model, *fixture->dag, units);
+}
+
+class FrontierCheckingStrategy final : public VPTOSchedStrategy {
+public:
+  FailureOr<VPTOSchedDecision>
+  pickCandidate(const VPTOScheduleContext &context,
+                ArrayRef<VPTOSchedCandidate> candidates,
+                std::string &detail) const override {
+    for (const VPTOSchedCandidate &candidate : candidates) {
+      Operation *op = candidate.unit->getOperation();
+      const VPTORegPressureEvaluation &pressure = candidate.pressure;
+      bool crossesClass = isa<VcmpOp>(op) && pressure.released[VectorPressure] > 0 &&
+                          pressure.introduced[PredicatePressure] > 0;
+      if (crossesClass) {
+        checkedCrossClass = true;
+        if (!candidate.opensPressureFrontier) {
+          detail = "vector release must not hide a new predicate frontier";
+          return failure();
+        }
+      }
+      bool replacesPredicate = isa<PnotOp>(op) && pressure.released[PredicatePressure] > 0 &&
+                               pressure.introduced[PredicatePressure] > 0;
+      if (replacesPredicate) {
+        checkedReplacement = true;
+        if (candidate.opensPressureFrontier) {
+          detail = "same-class replacement must retain its frontier";
+          return failure();
+        }
+      }
+    }
+    return getDefaultVPTOSchedStrategy().pickCandidate(context, candidates,
+                                                       detail);
+  }
+
+  bool checkedBoth() const { return checkedCrossClass && checkedReplacement; }
+
+private:
+  mutable bool checkedCrossClass = false;
+  mutable bool checkedReplacement = false;
+};
+
+static bool testRegisterClassFrontiers(MLIRContext &context,
+                                       const TrackerTestModel &model) {
+  static constexpr StringLiteral source = R"mlir(
+module {
+  func.func @frontiers(%x: !pto.vreg<64xf32>, %y: !pto.vreg<64xf32>,
+                       %active: !pto.mask<b32>, %ptr: !pto.ptr<f32, ub>) {
+    %c0 = arith.constant 0 : index
+    pto.vecscope {
+      %v = pto.vmax %x, %y, %active : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %p = pto.vcmp %v, %y, %active, "eq" : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.mask<b32>
+      %q = pto.pnot %p, %active : !pto.mask<b32>, !pto.mask<b32> -> !pto.mask<b32>
+      %r = pto.vsel %x, %y, %q : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      pto.vsts %r, %ptr[%c0], %active : !pto.vreg<64xf32>, !pto.ptr<f32, ub>, !pto.mask<b32>
+    }
+    return
+  }
+}
+)mlir";
+  FailureOr<PressureFixture> fixture =
+      buildPressureFixtureFromSource(context, model, source, std::nullopt, true);
+  if (!check(succeeded(fixture), "cannot build register-class fixture")) {
+    return false;
+  }
+  VPTOSchedulerLimits limits;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure failure;
+  FrontierCheckingStrategy strategy;
+  VPTOScheduler scheduler(model, *fixture->dag, limits, budget, false, strategy);
+  bool ok = check(succeeded(scheduler.schedule(failure)) && strategy.checkedBoth(),
+                  "scheduler must distinguish register-class frontiers");
+  if (ok) {
+    llvm::outs() << "scheduler register-class frontiers: pass\n";
+  }
+  return ok;
 }
 
 static bool testGenericA5PredicateLimit() {
@@ -1932,11 +2013,96 @@ static bool testRandomDAGDifferential(MLIRContext &context) {
   return true;
 }
 
+static constexpr StringLiteral kRematerializationFailureSource = R"mlir(
+module attributes {pto.target_arch = "a5"} {
+  func.func @remat_second_schedule_failure() {
+    %one = arith.constant 1.0 : f32
+    %lower = arith.constant 0 : index
+    %upper = arith.constant 2 : index
+    %step = arith.constant 1 : index
+    pto.vecscope {
+      %mask = pto.pset_b32 "PAT_ALL" : !pto.mask<b32>
+      %root0 = pto.vdup %one, %mask : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+      %root1 = pto.vdup %one, %mask : f32, !pto.mask<b32> -> !pto.vreg<64xf32>
+      scf.for %i = %lower to %upper step %step {
+        %use0 = pto.vmax %root0, %root0, %mask : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+        %use1 = pto.vmax %root1, %root1, %mask : !pto.vreg<64xf32>, !pto.vreg<64xf32>, !pto.mask<b32> -> !pto.vreg<64xf32>
+      }
+    }
+    return
+  }
+}
+)mlir";
+
+static std::string printModuleToString(ModuleOp module) {
+  std::string result;
+  llvm::raw_string_ostream stream(result);
+  module.print(stream);
+  stream.flush();
+  return result;
+}
+
+static bool forceRematerializationDAGBuildFailure(
+    ModuleOp module, const TrackerTestModel &model,
+    const llvm::DenseSet<Operation *> &anchors) {
+  VecScopeOp scope = findVecScope(module);
+  if (!scope) {
+    return false;
+  }
+  VPTOSchedulerLimits limits;
+  limits.maxNodes = 0;
+  VPTOSchedulingBudget budget(limits.maxWorkUnits);
+  VPTOScheduleFailure failure;
+  VPTOSchedRegion region = buildPressureRegion(scope);
+  VPTOSchedDAGBuilder builder(&model, limits, &budget, &anchors);
+  return failed(builder.build(region, failure));
+}
+
+static bool testRematerializationSecondScheduleFailure(MLIRContext &context) {
+  OwningOpRef<ModuleOp> module =
+      parseModule(context, kRematerializationFailureSource);
+  if (!check(static_cast<bool>(module),
+             "cannot parse rematerialization failure fixture")) {
+    return false;
+  }
+  func::FuncOp func =
+      module->lookupSymbol<func::FuncOp>("remat_second_schedule_failure");
+  std::string initialIR = printModuleToString(*module);
+
+  TrackerTestModel model(/*trackUnboundedPressure=*/false,
+                         /*predicateLimit=*/2, /*vectorLimit=*/1);
+  std::string trace;
+  llvm::raw_string_ostream traceStream(trace);
+  VPTORematerializationTransaction transaction =
+      prepareVPTORematerialization(func, model, traceStream, false);
+  if (!check(transaction.changed(),
+             "rematerialization failure fixture must clone candidates")) {
+    return false;
+  }
+
+  bool ok = check(
+      forceRematerializationDAGBuildFailure(
+          *module, model, transaction.getAnchors()),
+      "second scheduling DAG build must fail under zero node budget");
+
+  transaction.rollback();
+  ok &= check(succeeded(verify(*module)),
+              "rollback after second schedule failure must verify");
+  ok &= check(initialIR == printModuleToString(*module),
+              "rollback after second schedule failure must restore IR");
+  if (ok) {
+    llvm::outs()
+        << "rematerialization second-schedule failure rollback: pass\n";
+  }
+  return ok;
+}
+
 } // namespace
 
 int main() {
   DialectRegistry registry;
-  registry.insert<PTODialect, func::FuncDialect, arith::ArithDialect>();
+  registry.insert<PTODialect, func::FuncDialect, arith::ArithDialect,
+                  scf::SCFDialect>();
   MLIRContext context(registry);
   context.loadAllAvailableDialects();
 
@@ -1947,12 +2113,14 @@ int main() {
       !testBitcastPressureAliasing(context, genericModel) ||
       !testBitcastPressureCacheInvalidation(context, genericModel) ||
       !testPressureAwareStrategy(context) ||
+      !testRegisterClassFrontiers(context, model) ||
       !testGenericA5PredicateLimit() || !testBoundary(context, model) ||
       !testBoundaryBudget(context, model) || !testScheduler(context, model) ||
       !testPressureNoPendingProgress(context) ||
       !testPressureReliefDoesNotIdle(context) ||
       !testUnboundedPressureScheduling(context) ||
-      !testRandomDAGDifferential(context)) {
+      !testRandomDAGDifferential(context) ||
+      !testRematerializationSecondScheduleFailure(context)) {
     return 1;
   }
   return 0;

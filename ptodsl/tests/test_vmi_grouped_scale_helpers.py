@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -6,6 +7,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Keep the complete VMI grouped-scale pipeline aligned with direct CCE."""
 
 from pathlib import Path
@@ -127,8 +129,15 @@ def main() -> None:
         raise AssertionError(
             f"grouped-scale reduction must not convert through F32:\n{vpto}"
         )
+    # The broadcast must stay in registers: the vcgmax..vmul window must not
+    # reload (vlds) the scale from memory. The final scale *output* store may
+    # be scheduled before the muls by VPTOScheduler when the store address is a
+    # resolvable constant (signless i64 pointer carriers); that is a legal,
+    # more aggressive schedule and does not reintroduce a memory round-trip,
+    # so a vsts in this window is tolerated. The vsts total (2) is asserted
+    # separately above.
     broadcast = vpto[vpto.index("pto.vcgmax") : vpto.index("pto.vmul")]
-    if "pto.vsts" in broadcast or "pto.vlds" in broadcast:
+    if "pto.vlds" in broadcast:
         raise AssertionError(
             f"grouped scale must stay in registers through broadcast:\n{vpto}"
         )

@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -61,6 +62,7 @@ TensorViewType = _pto_mod.TensorViewType
 PartitionTensorViewType = _pto_mod.PartitionTensorViewType
 TileType = _pto_mod.TileType
 TileBufType = _pto_mod.TileBufType
+ConvTileBufType = _pto_mod.ConvTileBufType
 AddressSpace = _pto_mod.AddressSpace
 AddressSpaceAttr = _pto_mod.AddressSpaceAttr
 FenceScope = _pto_mod.FenceScope
@@ -68,6 +70,7 @@ FenceScopeAttr = _pto_mod.FenceScopeAttr
 LoadCachePolicy = _pto_mod.LoadCachePolicy
 LoadCachePolicyAttr = _pto_mod.LoadCachePolicyAttr
 TileBufConfigAttr = _pto_mod.TileBufConfigAttr
+ConvTileConfigAttr = _pto_mod.ConvTileConfigAttr
 BLayout = _pto_mod.BLayout
 BLayoutAttr = _pto_mod.BLayoutAttr
 SLayout = _pto_mod.SLayout
@@ -110,12 +113,16 @@ FmodPrecision = _pto_mod.FmodPrecision
 FmodPrecisionAttr = _pto_mod.FmodPrecisionAttr
 SaturationMode = _pto_mod.SaturationMode
 SaturationModeAttr = _pto_mod.SaturationModeAttr
+FmatrixMode = _pto_mod.FmatrixMode
+FmatrixModeAttr = _pto_mod.FmatrixModeAttr
 CmpMode = _pto_mod.CmpMode
 CmpModeAttr = _pto_mod.CmpModeAttr
 PIPE = _pto_mod.PIPE
 PipeAttr = _pto_mod.PipeAttr
 Layout = _pto_mod.Layout
 LayoutAttr = _pto_mod.LayoutAttr
+ConvLayout = _pto_mod.ConvLayout
+ConvLayoutAttr = _pto_mod.ConvLayoutAttr
 SyncOpType = _pto_mod.SyncOpType
 SyncOpTypeAttr = _pto_mod.SyncOpTypeAttr
 EVENT = _pto_mod.EVENT
@@ -300,12 +307,16 @@ __all__ = [
     "FmodPrecisionAttr",
     "SaturationMode",
     "SaturationModeAttr",
+    "FmatrixMode",
+    "FmatrixModeAttr",
     "CmpMode",
     "CmpModeAttr",
     "PIPE",
     "PipeAttr",
     "Layout",
     "LayoutAttr",
+    "ConvLayout",
+    "ConvLayoutAttr",
     "SyncOpType",
     "SyncOpTypeAttr",
     "EVENT",
@@ -323,6 +334,8 @@ __all__ = [
     "VecStoreMode",
     "VecStoreModeAttr",
     "TileBufConfigAttr",
+    "ConvTileConfigAttr",
+    "ConvTileBufType",
     "TileConfig",
     # High-level sync helpers
     "record_event",
@@ -342,11 +355,6 @@ __all__ = [
     # A5 buffer-id sync helpers
     "get_buf",
     "rls_buf",
-    # Scalar pointer helpers
-    "ptrtoint",
-    "inttoptr",
-    "load_scalar",
-    "store_scalar",
     # Aliases for SyncOpType enums (for terse calls)
     "TLOAD",
     "TSTORE_ACC",
@@ -743,68 +751,6 @@ def rls_buf(op_type, buf_id, mode=0, *, loc=None, ip=None):
     return _ods_ir.Operation.create(
         "pto.rls_buf",
         attributes=attrs,
-        loc=loc,
-        ip=ip,
-    )
-
-
-# -----------------------------------------------------------------------------
-# Scalar pointer helpers (manual wrappers until python ops are regenerated)
-# -----------------------------------------------------------------------------
-
-
-def ptrtoint(ptr, *, loc=None, ip=None):
-    operands = [
-        get_op_result_or_value(ptr),
-    ]
-    op = _ods_ir.Operation.create(
-        "pto.ptrtoint",
-        results=[_ods_ir.IntegerType.get_signless(64)],
-        operands=operands,
-        loc=loc,
-        ip=ip,
-    )
-    return op.results[0]
-
-
-def inttoptr(result_type, addr, *, loc=None, ip=None):
-    operands = [
-        get_op_result_or_value(addr),
-    ]
-    op = _ods_ir.Operation.create(
-        "pto.inttoptr",
-        results=[result_type],
-        operands=operands,
-        loc=loc,
-        ip=ip,
-    )
-    return op.results[0]
-
-
-def load_scalar(result_type, ptr, offset, *, loc=None, ip=None):
-    operands = [
-        get_op_result_or_value(ptr),
-        get_op_result_or_value(offset),
-    ]
-    op = _ods_ir.Operation.create(
-        "pto.load_scalar",
-        results=[result_type],
-        operands=operands,
-        loc=loc,
-        ip=ip,
-    )
-    return op.results[0]
-
-
-def store_scalar(ptr, offset, value, *, loc=None, ip=None):
-    operands = [
-        get_op_result_or_value(ptr),
-        get_op_result_or_value(offset),
-        get_op_result_or_value(value),
-    ]
-    return _ods_ir.Operation.create(
-        "pto.store_scalar",
-        operands=operands,
         loc=loc,
         ip=ip,
     )
@@ -1330,9 +1276,9 @@ class _VKernelBuilder:
         value.name = self.ctx.new_ssa()
         lit = _literal_text(value.literal)
         if isinstance(value.literal, bool):
-            self._emit(lines, indent, f"{value.name} = arith.constant {lit}")
+            self._emit(lines, indent, f"{value.name} = pto.constant {lit}")
         else:
-            self._emit(lines, indent, f"{value.name} = arith.constant {lit} : {value.type.render()}")
+            self._emit(lines, indent, f"{value.name} = pto.constant {lit} : {value.type.render()}")
         return value
 
     def _literal_value(self, node, lines, indent, expected_type):

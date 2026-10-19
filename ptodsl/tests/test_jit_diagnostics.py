@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -10,7 +11,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ptodsl import pto, scalar
+from ptodsl import pto
 from ptodsl._ast_rewrite import PTODSLAstRewriteError
 from ptodsl._host_tensors import TensorSpec
 from ptodsl._host_tensors import inspect_host_tensor_metadata
@@ -113,13 +114,13 @@ def float_addptr_offset_probe():
 @pto.jit(target="a5")
 def float_bitwise_probe():
     tile = pto.alloc_tile(shape=[1, 8], dtype=pto.f32, valid_shape=[1, 1])
-    value = scalar.load(tile[0, 0])
+    value = pto.load(tile[0, 0])
     _ = value & 1
 
 
 @pto.jit(target="a5")
 def float_literal_index_store_probe(ptr: pto.ptr(pto.index, "gm")):
-    scalar.store(1.5, ptr)
+    pto.store(1.5, ptr)
 
 
 @pto.jit(target="a5")
@@ -132,8 +133,8 @@ def float_literal_index_binary_probe():
 def same_width_float_store_probe():
     f16_tile = pto.alloc_tile(shape=[1, 16], dtype=pto.f16, valid_shape=[1, 1])
     bf16_tile = pto.alloc_tile(shape=[1, 16], dtype=pto.bf16, valid_shape=[1, 1])
-    f16_value = scalar.load(f16_tile[0, 0])
-    scalar.store(f16_value, bf16_tile[0, 0])
+    f16_value = pto.load(f16_tile[0, 0])
+    pto.store(f16_value, bf16_tile[0, 0])
 
 
 @pto.jit(target="a5")
@@ -148,6 +149,13 @@ def vmi_float_vcadd_none_reassoc_probe():
     src = pto.vmi.vbrc(pto.f32(0.0), size=64)
     mask = pto.vmi.create_mask(64, size=64)
     _ = pto.vmi.vcadd(src, mask, reassoc=None)
+
+
+@pto.jit(target="a5")
+def vmi_float_vcadd_false_reassoc_probe():
+    src = pto.vmi.vbrc(pto.f32(0.0), size=64)
+    mask = pto.vmi.create_mask(64, size=64)
+    _ = pto.vmi.vcadd(src, mask, reassoc=False)
 
 
 @pto.jit(target="a5")
@@ -185,15 +193,22 @@ def vmi_vload_mixed_mode_probe():
     tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src = tile.as_ptr()
     offset = pto.const(0, dtype=pto.index)
-    _ = pto.vmi.vload(src, offset, size=64, dist_mode="continuous", group=8, stride=8)
+    _ = pto.vmi.vload(
+        src,
+        offset,
+        size=64,
+        group=8,
+        stride=8,
+        block_stride=pto.i16(8),
+    )
 
 
 @pto.jit(target="a5")
-def vmi_vload_brc_stride_without_group_probe():
+def vmi_vload_dist_mode_removed_probe():
     tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src = tile.as_ptr()
     offset = pto.const(0, dtype=pto.index)
-    _ = pto.vmi.vload(src, offset, size=64, dist_mode="brc", stride=8)
+    _ = pto.vmi.vload(src, offset, size=64, dist_mode="dintlv")
 
 
 @pto.jit(target="a5")
@@ -208,10 +223,10 @@ def vmi_vstore_group_mask_probe():
 
 @pto.jit(target="a5")
 def vmi_vbrc_group_lane_mismatch_probe():
-    tile = pto.alloc_tile(shape=[1, 16], dtype=pto.f32)
+    tile = pto.alloc_tile(shape=[1, 64], dtype=pto.f32)
     src = tile.as_ptr()
     offset = pto.const(0, dtype=pto.index)
-    compact = pto.vmi.vload(src, offset, size=16)
+    compact = pto.vmi.vload(src, offset, size=4)
     _ = pto.vmi.vbrc(compact, size=64, group=8)
 
 @pto.jit(target="a5")
@@ -247,13 +262,13 @@ def bool_fixed_integer_probe():
 @pto.jit(target="a5")
 def bool_tile_element_probe():
     tile = pto.alloc_tile(shape=[2, 8], dtype=pto.i32, valid_shape=[2, 4])
-    _ = scalar.load(tile[True, 0])
+    _ = pto.load(tile[True, 0])
 
 
 @pto.jit(target="a5")
 def bool_address_sugar_probe():
     tile = pto.alloc_tile(shape=[1, 8], dtype=pto.i32, valid_shape=[1, 4])
-    _ = scalar.load(tile.as_ptr() + True)
+    _ = pto.load(tile.as_ptr() + True)
 
 
 @pto.jit(target="a5")
@@ -704,6 +719,11 @@ def taddrelu_a5_probe():
     pto.tile.addrelu(lhs, rhs, dst)
 
 
+@pto.jit(target="a3")
+def pipe_s_cross_wait_a3_probe():
+    pto.wait_cross_block(pto.Pipe.S, 14)
+
+
 def define_ast_rewrite_traceback_line_probe():
     @pto.jit(  # AST_REWRITE_FIRST_LINE_MARKER
         target="a5",
@@ -753,7 +773,7 @@ def main() -> None:
     expect_raises(
         float_literal_index_store_probe.compile,
         TypeError,
-        "scalar.store(...)",
+        "pto.store(...)",
         "cannot materialize a floating-point literal against non-floating",
         "index",
     )
@@ -776,14 +796,21 @@ def main() -> None:
         "pto.vmi.vcadd(...)",
         "floating-point vectors",
         "reassoc",
-        "reassoc=True or reassoc=False",
+        "reassoc=True",
     )
     expect_raises(
         vmi_float_vcadd_none_reassoc_probe.compile,
         TypeError,
         "pto.vmi.vcadd(...)",
-        "True or False",
+        "only reassoc=True",
         "received None",
+    )
+    expect_raises(
+        vmi_float_vcadd_false_reassoc_probe.compile,
+        TypeError,
+        "pto.vmi.vcadd(...)",
+        "only reassoc=True",
+        "received False",
     )
     expect_raises(
         vmi_vbrc_untyped_scalar_probe.compile,
@@ -821,13 +848,12 @@ def main() -> None:
         vmi_vload_mixed_mode_probe.compile,
         TypeError,
         "pto.vmi.vload(...)",
-        "dist_mode together with group",
+        "block_stride together with group",
     )
     expect_raises(
-        vmi_vload_brc_stride_without_group_probe.compile,
+        vmi_vload_dist_mode_removed_probe.compile,
         TypeError,
-        "pto.vmi.vload(...)",
-        "accepts stride only when group is provided",
+        "unexpected keyword argument 'dist_mode'",
     )
     expect_raises(
         vmi_vstore_group_mask_probe.compile,
@@ -1342,6 +1368,13 @@ def main() -> None:
         "target='a2'",
         "target='a3'",
         "target='a5'",
+    )
+    expect_raises(
+        pipe_s_cross_wait_a3_probe.compile,
+        ValueError,
+        "wait_cross_block(Pipe.S, event_id)",
+        "target='a5'",
+        "target='a3'",
     )
     expect_raises(
         define_tprint_vpto_rejected_probe().compile,

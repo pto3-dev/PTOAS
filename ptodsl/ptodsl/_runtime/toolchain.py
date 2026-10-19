@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,11 +6,13 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """Resolve external toolchain binaries and CANN paths."""
 
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 from pathlib import Path
 
@@ -47,6 +50,11 @@ def resolve_bisheng() -> str:
         return found
 
     raise FileNotFoundError("bisheng compiler not found; source ASCEND setenv.bash first")
+
+
+def bisheng_extra_flags() -> list[str]:
+    """Return extra Bisheng arguments supplied by the active environment."""
+    return shlex.split(os.environ.get("BISHENG_FLAGS", ""))
 
 
 def ascend_home_path() -> Path:
@@ -169,6 +177,7 @@ __all__ = [
     "aicore_arch_for_kernel_kind",
     "ascend_driver_path",
     "ascend_home_path",
+    "bisheng_extra_flags",
     "common_include_flags",
     "runtime_library_flags",
     "simulator_library_dirs",

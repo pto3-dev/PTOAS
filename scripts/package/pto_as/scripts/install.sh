@@ -18,6 +18,8 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # --------------------------------------------------------------------------------
+# Installation metadata lives in share/info/pto_as; the private wheel payload
+# lives in tools/ptoas/wheels. Reinstall cleanup must handle both locations.
 # error number and description
 OPERATE_FAILED="0x0001"
 PARAM_INVALID="0x0002"
@@ -65,7 +67,7 @@ ASCEND_INSTALL_INFO="ascend_install.info"
 TARGET_INSTALL_PATH="${DEFAULT_INSTALL_PATH}" #--input-path
 TARGET_USERNAME="${CURR_OPERATE_USER}"
 TARGET_USERGROUP="${CURR_OPERATE_GROUP}"
-TARGET_MOULDE_DIR=""  # TARGET_INSTALL_PATH + PKG_VERSION_DIR + PTO_PLATFORM_DIR
+TARGET_MOULDE_DIR=""  # TARGET_VERSION_DIR + share/info/pto_as
 TARGET_VERSION_DIR="" # TARGET_INSTALL_PATH + PKG_VERSION_DIR
 
 # keys of infos in ascend_install.info
@@ -588,7 +590,25 @@ init_env() {
     TARGET_VERSION_DIR=${temp_path_val}${TARGET_VERSION_DIR}
   fi
 
-  TARGET_MOULDE_DIR="${TARGET_VERSION_DIR}/${PTO_PLATFORM_DIR}"
+  TARGET_MOULDE_DIR="${TARGET_VERSION_DIR}/share/info/${PTO_PLATFORM_DIR}"
+
+  # The directories this install will create, deepest first, stopping at the
+  # first ancestor that already exists. Removal uses the list to drop the
+  # emptied skeleton; stopping at an existing ancestor is what keeps it from
+  # ever touching a directory the user or another component already had, since a
+  # recorded directory is by construction one that did not exist before. The
+  # version directory sits under the install path, so its chain covers both.
+  local previous_created_dirs=""
+  if [ -r "${TARGET_MOULDE_DIR}/${PTOAS_CREATED_DIRS_RECORD}" ]; then
+    previous_created_dirs="$(cat "${TARGET_MOULDE_DIR}/${PTOAS_CREATED_DIRS_RECORD}" 2>/dev/null)"
+  fi
+  PTOAS_CREATED_DIRS="$(pto_created_dir_chain "${TARGET_VERSION_DIR}")"
+  # Reinstalling over an existing install creates nothing, so the chain above is
+  # empty; the directories the *first* install created must not be forgotten, or
+  # the final removal stops leaving the prefix behind.
+  if [ -z "${PTOAS_CREATED_DIRS}" ]; then
+    PTOAS_CREATED_DIRS="${previous_created_dirs}"
+  fi
 
   UNINSTALL_SHELL_FILE="${TARGET_VERSION_DIR}/share/info/pto_as/script/pto_uninstall.sh"
   INSTALL_INFO_FILE="${TARGET_VERSION_DIR}/share/info/pto_as/${ASCEND_INSTALL_INFO}"
@@ -680,6 +700,26 @@ mkdir_install_path() {
   fi
 }
 
+prepare_reinstall() {
+  local package_root wheel_dir
+  package_root=$(readlink -f "${CURR_PATH}/../../../..") || return 1
+  wheel_dir="${TARGET_VERSION_DIR}/tools/ptoas/wheels"
+  # Validate the new payload before uninstalling an existing working package.
+  pto_find_wheel "${package_root}/tools/ptoas/wheels" >/dev/null || return 1
+  if [ "${package_root}/tools/ptoas/wheels" -ef "${wheel_dir}" ]; then
+    logandprint "[ERROR]: Cannot reinstall from the installed PTOAS wheel directory."
+    return 1
+  fi
+
+  clean_before_reinstall || return 1
+  # --copy_all merges directories. Remove orphaned wheels even when an earlier
+  # failed installation left no usable installation record or filelist.
+  if ! rm -rf -- "${wheel_dir}"; then
+    logandprint "[ERROR]: Failed to clean PTOAS wheel directory ${wheel_dir}."
+    return 1
+  fi
+}
+
 install_package() {
   if [ "${IS_INSTALL}" = "n" ] && [ "${IS_UPGRADE}" = "n" ]; then
     return
@@ -689,10 +729,11 @@ install_package() {
     interact_pre_check
   fi
 
-  # use uninstall to clean the install folder
-  clean_before_reinstall
-  if [ "$?" != 0 ]; then
-    comm_log_operation "Install" "${IN_INSTALL_TYPE}" "PTO" "$?" "${CMD_LIST}"
+  prepare_reinstall
+  local clean_ret="$?"
+  if [ "${clean_ret}" != 0 ]; then
+    comm_log_operation "Install" "${IN_INSTALL_TYPE}" "PTO" "${clean_ret}" "${CMD_LIST}"
+    return "${clean_ret}"
   fi
 
   bash "${INSTALL_SHELL_FILE}" "${TARGET_INSTALL_PATH}" "${TARGET_USERNAME}" "${TARGET_USERGROUP}" "${IN_FEATURE}" \
@@ -706,13 +747,39 @@ install_package() {
     chown -R "root":"root" "${TARGET_MOULDE_DIR}/script" 2>/dev/null
     chown "root":"root" "${TARGET_MOULDE_DIR}" 2>/dev/null
   fi
+
+  # Record what this install created, now that the component metadata directory
+  # exists. Removal reads it to drop the emptied skeleton without deleting a
+  # directory the user already had; at removal time an empty directory looks the
+  # same either way, so it can only be recorded here.
+  #
+  # The metadata directory is installed with a read-only mode, so its owner write
+  # bit is restored for the write and put back afterwards. The result is checked:
+  # reporting success while the record was never written would leave the skeleton
+  # cleanup silently disabled.
+  local created_dirs_record="${TARGET_MOULDE_DIR}/${PTOAS_CREATED_DIRS_RECORD}"
+  local record_saved_mode record_written=0
+  record_saved_mode=$(pto_relax_dir_write "${TARGET_MOULDE_DIR}")
+  rm -f "${created_dirs_record}" 2>/dev/null
+  if printf '%s\n' "${PTOAS_CREATED_DIRS}" >"${created_dirs_record}" 2>/dev/null; then
+    record_written=1
+  fi
+  chmod 644 "${created_dirs_record}" 2>/dev/null
+  pto_restore_dir_write "${TARGET_MOULDE_DIR}" "${record_saved_mode}"
+  if [ "${record_written}" != 1 ] || [ ! -e "${created_dirs_record}" ]; then
+    logandprint "[ERROR]: ERR_NO:${INSTALL_FAILED};ERR_DES:Cannot record the created directories\
+ (${created_dirs_record}); the installed layout could not be described."
+    comm_log_operation "Install" "${IN_INSTALL_TYPE}" "PTO" "${INSTALL_FAILED}" "${CMD_LIST}"
+    return 1
+  fi
+
   comm_log_operation "Install" "${IN_INSTALL_TYPE}" "PTO" "${install_ret}" "${CMD_LIST}"
   return "${install_ret}"
 }
 
 uninstall_package() {
   if [ "${IS_UNINSTALL}" = "n" ]; then
-    return
+    return 0
   fi
 
   if [ ! -f "${UNINSTALL_SHELL_FILE}" ]; then
@@ -726,11 +793,18 @@ uninstall_package() {
     comm_log_operation "Uninstall" "${IN_INSTALL_TYPE}" "PTO" "$?" "${CMD_LIST}"
     exit 0
   fi
-  bash "${UNINSTALL_SHELL_FILE}" "${TARGET_INSTALL_PATH}" "uninstall" "${IS_QUIET}" ${IN_FEATURE} "${IS_DOCKER_INSTALL}" "${DOCKER_ROOT}" "$pkg_version_dir"
+
+  # Propagate the component removal's status. Reporting the status of the log
+  # call instead let a failed removal look like a successful one: the caller
+  # then exits 0 while the installed files are still on disk.
+  local uninstall_ret=0
+  bash "${UNINSTALL_SHELL_FILE}" "${TARGET_INSTALL_PATH}" "uninstall" "${IS_QUIET}" ${IN_FEATURE} "${IS_DOCKER_INSTALL}" "${DOCKER_ROOT}" "$pkg_version_dir" ||
+    uninstall_ret="$?"
   # remove precheck info in ${TARGET_VERSION_DIR}/bin/prereq_check.bash
   logandprint "[INFO]: Remove precheck info."
 
-  comm_log_operation "Uninstall" "${IN_INSTALL_TYPE}" "PTO" "$?" "${CMD_LIST}"
+  comm_log_operation "Uninstall" "${IN_INSTALL_TYPE}" "PTO" "${uninstall_ret}" "${CMD_LIST}"
+  return "${uninstall_ret}"
 }
 
 pre_check_only() {
@@ -768,6 +842,10 @@ main() {
   fi
 
   uninstall_package
+  uninstall_ret="$?"
+  if [ "${uninstall_ret}" != 0 ]; then
+    exit "${uninstall_ret}"
+  fi
 
   pre_check_only
 }

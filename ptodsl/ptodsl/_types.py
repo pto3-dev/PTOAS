@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """
 Lazy MLIR type descriptors and eager type constructors.
 
@@ -19,8 +21,9 @@ where the annotation is evaluated at *import* time (no active context), and
 the actual type is materialised later by the ``@pto.jit`` decorator.
 """
 
+from __future__ import annotations
+
 from ptoas.mlir.dialects import pto as _pto
-from ptoas.mlir.dialects import arith
 from ptoas.mlir.dialects.builtin import UnrealizedConversionCastOp
 from ptoas.mlir.ir import (
     BF16Type,
@@ -30,7 +33,9 @@ from ptoas.mlir.ir import (
     Float8E5M2Type,
     FloatAttr,
     IndexType,
+    IntegerAttr,
     IntegerType,
+    Operation,
     ShapedType,
     Type,
     VectorType,
@@ -76,7 +81,11 @@ class _DType:
         target_type = self.resolve()
         kind = _classify_scalar_type(target_type)
         if kind == "float":
-            return arith.ConstantOp(target_type, _parse_float_attr(target_type, value)).result
+            return Operation.create(
+                "pto.constant",
+                results=[target_type],
+                attributes={"value": _parse_float_attr(target_type, value)},
+            ).results[0]
         if kind == "integer":
             return _materialize_integer_literal(target_type, value)
         raise TypeError(f"unsupported eager constructor target type {target_type}")
@@ -425,12 +434,14 @@ def _restore_integer_signedness(value, target_type):
 def _materialize_integer_literal(target_type, value):
     if not IntegerType.isinstance(target_type):
         raise TypeError(f"unsupported eager integer constructor target type {target_type}")
-    signless_type = _signless_integer_type(target_type)
     raw_value = _parse_integer_value(value, target_type=target_type)
-    constant = arith.ConstantOp(signless_type, raw_value).result
-    if target_type == signless_type:
-        return constant
-    return _restore_integer_signedness(constant, target_type)
+    signless_type = _signless_integer_type(target_type)
+    result = Operation.create(
+        "pto.constant",
+        results=[signless_type],
+        attributes={"value": IntegerAttr.get(signless_type, raw_value)},
+    ).results[0]
+    return _restore_integer_signedness(result, target_type)
 
 
 def _parse_integer_value(value, *, target_type=None):

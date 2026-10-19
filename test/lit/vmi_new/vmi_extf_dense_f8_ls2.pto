@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vmi-lower-unified-to-legacy -vmi-mask-granularity-assignment -vmi-layout-assignment -vmi-to-vpto | FileCheck %s
+
+// Lane-stride=2 8-bit data comes from UNPK_B8. Valid bytes occupy even lanes,
+// so extf must select P0/P2 rather than the zero-fill P1/P3 lanes.
+
+module {
+  func.func @dense_f8_ls2_to_f32_d2(
+      %x: !pto.vmi.vreg<128xf8E4M3FN, #pto.vmi.layout<contiguous, lane_stride = 2>>)
+      -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> {
+    %r = pto.vmi.vcvt %x
+        : !pto.vmi.vreg<128xf8E4M3FN, #pto.vmi.layout<contiguous, lane_stride = 2>>
+       -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    return %r : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+
+  func.func @dense_f8e5m2_ls2_to_f32_d2(
+      %x: !pto.vmi.vreg<128xf8E5M2, #pto.vmi.layout<contiguous, lane_stride = 2>>)
+      -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> {
+    %r = pto.vmi.vcvt %x
+        : !pto.vmi.vreg<128xf8E5M2, #pto.vmi.layout<contiguous, lane_stride = 2>>
+       -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    return %r : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+
+  func.func @hif8_ls2_to_f32_d2(
+      %x: !pto.vmi.vreg<128x!pto.hif8, #pto.vmi.layout<contiguous, lane_stride = 2>>)
+      -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>> {
+    %r = pto.vmi.vcvt %x
+        : !pto.vmi.vreg<128x!pto.hif8, #pto.vmi.layout<contiguous, lane_stride = 2>>
+       -> !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+    return %r : !pto.vmi.vreg<128xf32, #pto.vmi.layout<deinterleaved = 2>>
+  }
+}
+
+// CHECK-LABEL: func.func @dense_f8_ls2_to_f32_d2(
+// CHECK: pto.vcvt {{.*}} {part = "P0"}
+// CHECK: pto.vcvt {{.*}} {part = "P2"}
+// CHECK-NOT: part = "P1"
+// CHECK-NOT: part = "P3"
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @dense_f8e5m2_ls2_to_f32_d2(
+// CHECK: pto.vcvt {{.*}} {part = "P0"}
+// CHECK: pto.vcvt {{.*}} {part = "P2"}
+// CHECK-NOT: part = "P1"
+// CHECK-NOT: part = "P3"
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast
+
+// CHECK-LABEL: func.func @hif8_ls2_to_f32_d2(
+// CHECK: pto.vcvt {{.*}} {part = "P0"}
+// CHECK: pto.vcvt {{.*}} {part = "P2"}
+// CHECK-NOT: part = "P1"
+// CHECK-NOT: part = "P3"
+// CHECK-NOT: pto.vmi.
+// CHECK-NOT: !pto.vmi.
+// CHECK-NOT: unrealized_conversion_cast

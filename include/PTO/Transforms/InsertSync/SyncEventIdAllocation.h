@@ -40,6 +40,12 @@ using SyncCycle = DenseMap<int, EventCyclePool>;
  
 class SyncEventIdAllocation {
 public:
+  /// Number of event ids reserved at the tail of the intra-core pool
+  /// [0, kTotalEventIdNum) for the direction `src -> dst`; 0 when the direction
+  /// reserves nothing. Exposed so the device-id-legality gate reads the same
+  /// reservation map this allocator obeys, rather than duplicating it.
+  static uint64_t GetReservedEventIdNum(PipelineType src, PipelineType dst);
+
   SyncEventIdAllocation(SyncIRs &syncIR, SyncOperations &syncOperations)
       : syncIR_(syncIR), syncOperations_(syncOperations) {
     reserveBlockAllEventIds();
@@ -52,11 +58,11 @@ public:
  
 private:
   void AllocateEventId(const InstanceElement *e);
-  size_t GetCompilerAvailableEventIdNum(const SyncOperation *sync);
+  size_t GetCompilerAvailableEventIdNum(const SyncOperation *sync) const;
   void SetEventId(SyncOperation *sync);
  
   SmallVector<bool> GetEventPool(const SyncOperation *sync, size_t eventIdNum);
-  int ScopePair(const SyncOperation *s);
+  int ScopePair(const SyncOperation *s) const;
   int ScopePair(PipelineType srcPipe, PipelineType dstPipe) const;
   void FindUseEventID(unsigned int begin, unsigned int end,
                       const SyncOperation *s, SmallVector<bool> &eventId);
@@ -73,6 +79,9 @@ private:
  
   void UpdateBackwardMatchSync(const SyncOperation *setFlag,
                                const SyncOperation *waitFlag, unsigned eventId);
+  void InsertBackwardMatchBoundarySyncs(const SyncOperation *setFlag,
+                                        SyncOperation &syncFront,
+                                        SyncOperation &syncEnd);
  
   void SetUseEventID(unsigned int begin, unsigned int end,
                      const SyncOperation *setFlag, unsigned int eventId);
@@ -100,14 +109,14 @@ private:
   SmallVector<int>
   GetAvailableEventId(SyncOperation *sync,
                       SmallVector<bool> eventIdLifetimeAvailableStatus,
-                      SmallVector<bool> eventIdIdleStatus, size_t eventIdNum);
+                      SmallVector<bool> eventIdIdleStatus, size_t eventIdNum) const;
  
   SmallVector<int>
-  UpdateBlockAvailableEventId(SyncOperation *sync,
+  UpdateBlockAvailableEventId(const SyncOperation *sync,
                               SmallVector<bool> eventIdLifetimeAvailableStatus,
-                              size_t eventIdNum);
+                              size_t eventIdNum) const;
  
-  void SetBlockSyncAllEventID(SyncOperation *sync);
+  void SetBlockSyncAllEventID(SyncOperation *sync) const;
   void IgnoreBackHeadAndTailSync();
   void reserveBlockAllEventIds();
   void SeedHiddenMacroEventIds(

@@ -19,8 +19,8 @@
 // SHAPE: pto.tile_buf_addr
 // SHAPE-NOT: pto.tile_valid_rows
 // SHAPE-NOT: pto.tile_valid_cols
-// SHAPE: arith.constant 16 : index
-// SHAPE: arith.constant 64 : index
+// SHAPE-DAG: arith.constant 16 : index
+// SHAPE-DAG: arith.constant 64 : index
 // SHAPE: pto.vlds
 // SHAPE: pto.vadd
 // SHAPE: pto.vsts
@@ -44,7 +44,8 @@
 // - tile_buf_addr has been folded to concrete pto.castptr addresses
 // - tile-slice addressing is carried by the vlds/vsts offset operand
 // NORMALIZED-LABEL: func.func @TADD
-// NORMALIZED: pto.castptr
+// The modern planner reuses the address of %a for %dst (in-place TADD), so
+// only two distinct castptr addresses remain.
 // NORMALIZED: pto.castptr
 // NORMALIZED: pto.castptr
 // NORMALIZED-NOT: pto.tile_buf_addr

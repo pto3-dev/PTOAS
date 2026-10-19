@@ -44,13 +44,6 @@ enum class BishengVFAutoSyncMode {
   Global,
 };
 
-static llvm::cl::opt<bool> enableBishengVecMISched(
-    "enable-bisheng-vec-misched",
-    llvm::cl::desc("Use Bisheng's default vector MI scheduler behavior for "
-                   "VPTO device compilation instead of explicitly disabling "
-                   "the scheduler"),
-    llvm::cl::init(false));
-
 static llvm::cl::opt<bool> enableSimtFastMath(
     "simt-fastmath",
     llvm::cl::desc("Enable Bisheng SIMT floating-point contraction and fast "
@@ -281,12 +274,6 @@ discoverCppIncludeDirs(llvm::StringRef ascendHome,
   return includeDirs;
 }
 
-static bool compileDeviceLLVMToObject(llvm::StringRef llPath,
-                                      llvm::StringRef outObjPath,
-                                      llvm::StringRef targetCPU,
-                                      llvm::StringRef bishengPath,
-                                      llvm::StringRef stderrPath,
-                                      llvm::raw_ostream &diagOS);
 static bool compileHostStubToObject(llvm::StringRef stubPath,
                                     llvm::StringRef outObjPath,
                                     llvm::StringRef moduleId,
@@ -349,6 +336,7 @@ public:
 
   bool emitCubeObject(llvm::Module *module,
                       const mlir::pto::CANNToolchain &toolchain,
+                      mlir::pto::BishengSchedulerMode schedulerMode,
                       llvm::raw_ostream &diagOS) {
     if (!module) {
       return true;
@@ -360,12 +348,14 @@ public:
       return false;
     }
     return succeeded(mlir::pto::emitVPTOCubeDeviceObject(
-        *module, cubeLLPath, cubeObjPath, toolchain, stderrPath, diagOS));
+        *module, cubeLLPath, cubeObjPath, toolchain, stderrPath, diagOS,
+        schedulerMode));
   }
 
   bool emitVectorObject(llvm::Module *module,
                         const mlir::pto::CANNToolchain &toolchain,
                         mlir::pto::VFSIMTSizeFixMode vfsimtSizeFixMode,
+                        mlir::pto::BishengSchedulerMode schedulerMode,
                         llvm::raw_ostream &diagOS) {
     if (!module) {
       return true;
@@ -380,7 +370,7 @@ public:
     }
     if (failed(mlir::pto::emitVPTOVectorDeviceObject(
             *module, vectorLLPath, rawVectorObjPath, toolchain, stderrPath,
-            diagOS))) {
+            diagOS, schedulerMode))) {
       return false;
     }
     if (vfsimtSizeFixMode == mlir::pto::VFSIMTSizeFixMode::Off) {
@@ -525,59 +515,76 @@ static bool runCommandWithStderr(llvm::StringRef program,
   return false;
 }
 
-static bool compileDeviceLLVMToObject(llvm::StringRef llPath,
-                                      llvm::StringRef outObjPath,
-                                      llvm::StringRef targetCPU,
-                                      llvm::StringRef bishengPath,
-                                      llvm::StringRef stderrPath,
-                                      llvm::raw_ostream &diagOS) {
-  llvm::SmallVector<std::string, mlir::pto::kValue24> args = {
-      bishengPath.str(),
-      std::string("--cce-aicore-arch=") + targetCPU.str(),
-      "--cce-aicore-only",
-      "-O2",
-      "--cce-generic-addrspace=off",
-      "-cce-bitcode-is-aicore",
-      "-Wno-override-module",
-      "-dc",
-      "--cce-long-scbz=true",
+static bool compileDeviceLLVMToObject(
+    llvm::StringRef llPath, llvm::StringRef outObjPath, llvm::StringRef targetCPU, llvm::StringRef bishengPath,
+    llvm::StringRef stderrPath, llvm::raw_ostream& diagOS, mlir::pto::BishengSchedulerMode schedulerMode)
+{
+    llvm::SmallVector<std::string, mlir::pto::kValue24> args = {
+        bishengPath.str(),
+        std::string("--cce-aicore-arch=") + targetCPU.str(),
+        "--cce-aicore-only",
+        "-O2",
+        "--cce-generic-addrspace=off",
+        "-cce-bitcode-is-aicore",
+        "-Wno-override-module",
+        "-dc",
+        "--cce-long-scbz=true",
+        "-mllvm",
+        "-cce-dyn-kernel-stack-size=true",
+    };
+    switch (bishengVFAutoSyncMode) {
+        case BishengVFAutoSyncMode::Unspecified:
+            break;
+        case BishengVFAutoSyncMode::Off:
+            args.push_back("-mllvm");
+            args.push_back("-cce-vf-auto-sync=off");
+            break;
+        case BishengVFAutoSyncMode::Fused:
+            args.push_back("-mllvm");
+            args.push_back("-cce-vf-auto-sync=fused");
+            break;
+        case BishengVFAutoSyncMode::Global:
+            args.push_back("-mllvm");
+            args.push_back("-cce-vf-auto-sync=global");
+            break;
+    }
+    args.push_back("-mllvm");
+    args.push_back(std::string("--cce-simt-fpmath-combine=") + (enableSimtFastMath ? "true" : "false"));
+    auto compile = [&args, bishengPath, llPath](
+                       bool enabled, bool reportUsage, llvm::StringRef object, llvm::StringRef log,
+                       llvm::raw_ostream& diagnostics) {
+        auto variantArgs = args;
+        // On retains the toolchain's default; =1 is not equivalent on all versions.
+        if (!enabled) {
+            variantArgs.append({"-mllvm", "--cce-aicore-vec-misched=0"});
+        }
+        if (reportUsage) {
+            variantArgs.append({"-mllvm", "--cce-res-usage"});
+        }
+        variantArgs.append({"-c", "-x", "ir", "-", "-o", object.str()});
+        return runCommandWithStderr(bishengPath, variantArgs, log, diagnostics, "device LLVM compilation", llPath);
+    };
+    // One scheduler policy drives every device module. Only the vector target
+    // participates in auto selection; cube falls back to off unless the user
+    // asked for an explicit on, which must be preserved here as well.
+    auto mode = mlir::pto::getBishengSchedulerModeForTarget(schedulerMode, targetCPU.ends_with("-vec"));
+    return mlir::pto::compileWithBishengScheduler(mode, outObjPath, stderrPath, compile, diagOS);
+}
+
+static void appendCceAicoreMllvmFlags(
+    llvm::SmallVectorImpl<std::string> &args) {
+  args.append({
       "-mllvm",
-      "-cce-dyn-kernel-stack-size=true",
-  };
-  switch (bishengVFAutoSyncMode) {
-  case BishengVFAutoSyncMode::Unspecified:
-    break;
-  case BishengVFAutoSyncMode::Off:
-    args.push_back("-mllvm");
-    args.push_back("-cce-vf-auto-sync=off");
-    break;
-  case BishengVFAutoSyncMode::Fused:
-    args.push_back("-mllvm");
-    args.push_back("-cce-vf-auto-sync=fused");
-    break;
-  case BishengVFAutoSyncMode::Global:
-    args.push_back("-mllvm");
-    args.push_back("-cce-vf-auto-sync=global");
-    break;
-  }
-  // Enabling vector MI scheduling deliberately omits this argument instead of
-  // passing `=1`, so Bisheng retains the default behavior of the selected
-  // toolchain version.
-  if (!enableBishengVecMISched) {
-    args.push_back("-mllvm");
-    args.push_back("--cce-aicore-vec-misched=0");
-  }
-  args.push_back("-mllvm");
-  args.push_back(std::string("--cce-simt-fpmath-combine=") +
-                 (enableSimtFastMath ? "true" : "false"));
-  args.push_back("-c");
-  args.push_back("-x");
-  args.push_back("ir");
-  args.push_back("-");
-  args.push_back("-o");
-  args.push_back(outObjPath.str());
-  return runCommandWithStderr(bishengPath, args, stderrPath, diagOS,
-                              "device LLVM compilation", llPath);
+      "-cce-aicore-stack-size=0x8000",
+      "-mllvm",
+      "-cce-aicore-function-stack-size=0x8000",
+      "-mllvm",
+      "-cce-aicore-record-overflow=true",
+      "-mllvm",
+      "-cce-aicore-addr-transform",
+      "-mllvm",
+      "-cce-aicore-dcci-insert-for-scalar=false",
+  });
 }
 
 static bool compileCppDeviceSourceToObject(
@@ -593,21 +600,14 @@ static bool compileCppDeviceSourceToObject(
       "-fPIC",
       "-Xhost-start",
       "-Xhost-end",
-      "-mllvm",
-      "-cce-aicore-stack-size=0x8000",
-      "-mllvm",
-      "-cce-aicore-function-stack-size=0x8000",
-      "-mllvm",
-      "-cce-aicore-record-overflow=true",
-      "-mllvm",
-      "-cce-aicore-addr-transform",
-      "-mllvm",
-      "-cce-aicore-dcci-insert-for-scalar=false",
+  };
+  appendCceAicoreMllvmFlags(args);
+  args.append({
       std::string("--cce-aicore-arch=") + targetCPU.str(),
       "-DREGISTER_BASE",
       "-std=c++17",
       "-dc",
-  };
+  });
   for (const std::string &includeDir : toolchain.cppIncludeDirs) {
     args.push_back("-I" + includeDir);
   }
@@ -632,23 +632,16 @@ static bool compileCppDeviceSourceToFatobj(
       "-fPIC",
       "-Xhost-start",
       "-Xhost-end",
-      "-mllvm",
-      "-cce-aicore-stack-size=0x8000",
-      "-mllvm",
-      "-cce-aicore-function-stack-size=0x8000",
-      "-mllvm",
-      "-cce-aicore-record-overflow=true",
-      "-mllvm",
-      "-cce-aicore-addr-transform",
-      "-mllvm",
-      "-cce-aicore-dcci-insert-for-scalar=false",
+  };
+  appendCceAicoreMllvmFlags(args);
+  args.append({
       "--cce-aicore-arch=dav-c310",
       "-DREGISTER_BASE",
       "-std=c++17",
       "-O2",
       "-dc",
       "-c",
-  };
+  });
   for (const std::string &includeDir : toolchain.cppIncludeDirs) {
     args.push_back("-I" + includeDir);
   }
@@ -676,12 +669,12 @@ static std::string resolveHostTargetCPU() {
   return hostCPU;
 }
 
-static llvm::SmallVector<std::string, mlir::pto::kValue32>
-buildHostStubFrontendArgs(llvm::StringRef targetCPU,
-                          const mlir::pto::CANNToolchain &toolchain) {
+static void appendHostStubTargetAndCodegenArgs(
+    llvm::SmallVectorImpl<std::string> &args, llvm::StringRef targetCPU,
+    const mlir::pto::CANNToolchain &toolchain) {
   const std::string hostTriple = llvm::sys::getProcessTriple();
   const std::string hostTargetCPU = resolveHostTargetCPU();
-  return {
+  args.append({
       toolchain.bishengCc1Path,
       "-cc1",
       "-triple",
@@ -709,6 +702,13 @@ buildHostStubFrontendArgs(llvm::StringRef targetCPU,
       "pic",
       "-pic-level",
       "2",
+  });
+}
+
+static void appendHostStubIncludeAndOptimizeArgs(
+    llvm::SmallVectorImpl<std::string> &args,
+    const mlir::pto::CANNToolchain &toolchain) {
+  args.append({
       "-fhalf-no-semantic-interposition",
       "-mframe-pointer=none",
       "-fmath-errno",
@@ -741,22 +741,29 @@ buildHostStubFrontendArgs(llvm::StringRef targetCPU,
       "-stack-protector",
       "2",
       "-fno-signed-char",
+  });
+}
+
+static void appendHostStubExceptionAndCceArgs(
+    llvm::SmallVectorImpl<std::string> &args) {
+  args.append({
       "-fgnuc-version=4.2.1",
       "-fcxx-exceptions",
       "-fexceptions",
       "-vectorize-loops",
       "-vectorize-slp",
-      "-mllvm",
-      "-cce-aicore-stack-size=0x8000",
-      "-mllvm",
-      "-cce-aicore-function-stack-size=0x8000",
-      "-mllvm",
-      "-cce-aicore-record-overflow=true",
-      "-mllvm",
-      "-cce-aicore-addr-transform",
-      "-mllvm",
-      "-cce-aicore-dcci-insert-for-scalar=false",
-  };
+  });
+  appendCceAicoreMllvmFlags(args);
+}
+
+static llvm::SmallVector<std::string, mlir::pto::kValue32>
+buildHostStubFrontendArgs(llvm::StringRef targetCPU,
+                          const mlir::pto::CANNToolchain &toolchain) {
+  llvm::SmallVector<std::string, mlir::pto::kValue32> args;
+  appendHostStubTargetAndCodegenArgs(args, targetCPU, toolchain);
+  appendHostStubIncludeAndOptimizeArgs(args, toolchain);
+  appendHostStubExceptionAndCceArgs(args);
+  return args;
 }
 
 static void appendHostStubInputAndOutputArgs(
@@ -902,7 +909,7 @@ mlir::pto::CANNToolchain::create(llvm::raw_ostream &diagOS) {
   toolchain.bishengCompilerBinDirPath =
       joinPath(toolchain.ascendHomePath, "tools/bisheng_compiler/bin");
   toolchain.cannVersionString =
-      discoverCANNVersion(toolchain.ascendHomePath).value_or("9.0.0-beta.1");
+      discoverCANNVersion(toolchain.ascendHomePath).value_or("9.0.0");
   llvm::SmallVector<std::string, mlir::pto::kValue8> cppIncludeDirs = discoverCppIncludeDirs(
       toolchain.ascendHomePath, diagOS, toolchain.ptoIsaPath);
   toolchain.cppIncludeDirs.assign(cppIncludeDirs.begin(),
@@ -979,9 +986,11 @@ mlir::LogicalResult mlir::pto::compileCppToDeviceObject(
 mlir::LogicalResult mlir::pto::compileLLVMToDeviceObject(
     llvm::StringRef llPath, llvm::StringRef outObjPath,
     ObjectEmissionDeviceTarget target, const CANNToolchain &toolchain,
-    llvm::StringRef stderrPath, llvm::raw_ostream &diagOS) {
+    llvm::StringRef stderrPath, llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   return compileDeviceLLVMToObject(llPath, outObjPath, getTargetCPU(target),
-                                   toolchain.bishengPath, stderrPath, diagOS)
+                                   toolchain.bishengPath, stderrPath, diagOS,
+                                   schedulerMode)
              ? success()
              : failure();
 }
@@ -1089,7 +1098,8 @@ static mlir::LogicalResult applyVPTOLLVMABINames(llvm::Module &module,
 mlir::LogicalResult mlir::pto::emitVPTOVectorDeviceObject(
     llvm::Module &module, llvm::StringRef llPath, llvm::StringRef outObjPath,
     const CANNToolchain &toolchain, llvm::StringRef stderrPath,
-    llvm::raw_ostream &diagOS) {
+    llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   if (failed(applyVPTOLLVMABINames(
           module,
           toolchain.vptoPublicABISuffix(ObjectEmissionDeviceTarget::Vector),
@@ -1102,7 +1112,8 @@ mlir::LogicalResult mlir::pto::emitVPTOVectorDeviceObject(
   return compileDeviceLLVMToObject(llPath, outObjPath,
                                    resolveTargetCPU(module,
                                                     ObjectEmissionDeviceTarget::Vector),
-                                   toolchain.bishengPath, stderrPath, diagOS)
+                                   toolchain.bishengPath, stderrPath, diagOS,
+                                   schedulerMode)
              ? success()
              : failure();
 }
@@ -1110,7 +1121,8 @@ mlir::LogicalResult mlir::pto::emitVPTOVectorDeviceObject(
 mlir::LogicalResult mlir::pto::emitVPTOCubeDeviceObject(
     llvm::Module &module, llvm::StringRef llPath, llvm::StringRef outObjPath,
     const CANNToolchain &toolchain, llvm::StringRef stderrPath,
-    llvm::raw_ostream &diagOS) {
+    llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   if (failed(applyVPTOLLVMABINames(
           module,
           toolchain.vptoPublicABISuffix(ObjectEmissionDeviceTarget::Cube),
@@ -1123,7 +1135,8 @@ mlir::LogicalResult mlir::pto::emitVPTOCubeDeviceObject(
   return compileDeviceLLVMToObject(llPath, outObjPath,
                                    resolveTargetCPU(module,
                                                     ObjectEmissionDeviceTarget::Cube),
-                                   toolchain.bishengPath, stderrPath, diagOS)
+                                   toolchain.bishengPath, stderrPath, diagOS,
+                                   schedulerMode)
              ? success()
              : failure();
 }
@@ -1133,7 +1146,8 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVM(
     llvm::StringRef stubSource, llvm::StringRef outputPath,
     llvm::StringRef moduleId, const CANNToolchain &toolchain,
     TempFileRegistry &tempFiles, VFSIMTSizeFixMode vfsimtSizeFixMode,
-    llvm::raw_ostream &diagOS) {
+    llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   if (!cubeModule && !vectorModule) {
     diagOS << "Error: VPTO fatobj emission requires at least one LLVM module.\n";
     return failure();
@@ -1146,11 +1160,11 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVM(
   if (!artifacts.initCommandLogs(diagOS)) {
     return failure();
   }
-  if (!artifacts.emitCubeObject(cubeModule, toolchain, diagOS)) {
+  if (!artifacts.emitCubeObject(cubeModule, toolchain, schedulerMode, diagOS)) {
     return failure();
   }
   if (!artifacts.emitVectorObject(vectorModule, toolchain,
-                                  vfsimtSizeFixMode, diagOS)) {
+                                  vfsimtSizeFixMode, schedulerMode, diagOS)) {
     return failure();
   }
   if (!artifacts.mergeDeviceObjects(toolchain, diagOS)) {
@@ -1201,7 +1215,8 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVMWithRuntime(
     llvm::Module *cubeModule, llvm::Module *vectorModule,
     llvm::StringRef stubSource, llvm::ToolOutputFile &outputFile,
     VFSIMTSizeFixMode vfsimtSizeFixMode,
-    llvm::raw_ostream &diagOS) {
+    llvm::raw_ostream &diagOS,
+    BishengSchedulerMode schedulerMode) {
   if (!cubeModule && !vectorModule) {
     diagOS << "Error: VPTO fatobj emission requires at least one LLVM module.\n";
     return failure();
@@ -1221,11 +1236,11 @@ mlir::LogicalResult mlir::pto::emitFatobjLLVMWithRuntime(
     return failure();
   }
 
-  if (!artifacts.emitCubeObject(cubeModule, *toolchain, diagOS)) {
+  if (!artifacts.emitCubeObject(cubeModule, *toolchain, schedulerMode, diagOS)) {
     return failure();
   }
   if (!artifacts.emitVectorObject(vectorModule, *toolchain,
-                                  vfsimtSizeFixMode, diagOS)) {
+                                  vfsimtSizeFixMode, schedulerMode, diagOS)) {
     return failure();
   }
 

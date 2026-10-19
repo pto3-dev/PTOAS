@@ -192,12 +192,16 @@ group-slot control-flow/function boundary
 ## 3. Pass Pipeline
 
 ```text
-pto-validate-vmi-ir
+pto-vmi-normalize-signless-int-to-unsigned (func.func)
+  -> vmi-lower-unified-to-legacy
+  -> vmi-legalize-arith-select
+  -> pto-validate-vmi-ir
+  -> vmi-mask-granularity-assignment
   -> vmi-layout-assignment
   -> canonicalize/cse
-  -> vmi-layout-fold
-  -> canonicalize/cse
   -> vmi-layout-rematerialize
+  -> canonicalize/cse
+  -> vmi-layout-fold
   -> canonicalize/cse
   -> vmi-layout-sink-materialization
   -> canonicalize/cse
@@ -205,6 +209,13 @@ pto-validate-vmi-ir
   -> pto-validate-vmi-layout-ir
   -> vmi-to-vpto
 ```
+
+上图省略部分 canonicalize/CSE 和布局优化，完整顺序以
+`tools/ptoas/ptoas_pipeline.cpp::appendVMISemanticPipeline` 为准。
+公开 reduce 接口及 legacy reduction 均拒绝 8 位整数输入，包括 singleton。
+需要从 8 位数据归约时，调用方应显式转换到受支持的 16/32 位类型；编译器
+不再自动扩宽。宽类型归约、显式截断和 8 位广播按各自的类型与布局约束处理。
+详见 [Reduce](../isa/vmi-isa/05-reduce.md)。
 
 ### 3.1 `pto-validate-vmi-ir`
 
@@ -269,11 +280,11 @@ DataNode:
 
 ```text
 layout-transparent elementwise:
-  addf/addi/subf/subi/mulf/muli/fma/divf/minf/maxf/...
+  vadd/vsub/vmul/vmula/vdiv/vmin/vmax/...
   L(operands...) = L(result)
 
 unary elementwise:
-  negf/absf/absi/sqrt/exp/ln/relu/not
+  vneg/vabs/vsqrt/vexp/vln/vrelu/vnot
   L(source) = L(result)
 
 select:
@@ -307,7 +318,7 @@ surface VMI:
 
   %x = pto.vmi.load ...
   %k = pto.vmi.broadcast ...
-  %y = pto.vmi.mulf %x, %k
+  %y = pto.vmi.vmul %x, %k
   %q = pto.vmi.truncf %y
 
 data layout 等价类:
@@ -315,7 +326,7 @@ data layout 等价类:
   class C0
   +--------------------------------------+
   | %x        %k        %y               |
-  | load      broadcast mulf result      |
+  | load      broadcast vmul result      |
   +--------------------------------------+
                          ^
                          |
@@ -364,7 +375,7 @@ scf.if result 不是 consumer-driven adoption 的可采纳 producer。
 ```text
 surface VMI:
 
-  %y = pto.vmi.mulf %x, %k
+  %y = pto.vmi.vmul %x, %k
   pto.vmi.store %y, %out0
   %q = pto.vmi.truncf %y
 
@@ -392,7 +403,8 @@ baseline assignment 保留 C2 已有的 natural layout；若没有 natural layou
 
 group_reduce:
   source 需要适配 group reduce 指令形态；
-  result 使用 group_slots(num_groups, slots) 描述 group-slot result。
+  result 使用 group_slots(num_groups, slots, lane_stride) 描述 group-slot result；
+  原生 16-bit 整数 vcgadd 输出的 lane_stride=2，由生产者决定。
 
 cast:
   widening/narrowing 根据 cast support 决定 source request 和 result layout。
@@ -459,14 +471,14 @@ bitcast
 ```mlir
 %x = pto.vmi.load ...
 %k = pto.vmi.broadcast ...
-%y = pto.vmi.mulf %x, %k
+%y = pto.vmi.vmul %x, %k
 %q = pto.vmi.truncf %y
 ```
 
-`mulf` 先把 `%x`、`%k`、`%y` 合成同一个 data 等价类。`truncf` 对 `%y`
+`vmul` 先把 `%x`、`%k`、`%y` 合成同一个 data 等价类。`truncf` 对 `%y`
 的 source use 请求 `deinterleaved=4` 时，这个 request 作用到 `%y` 所在等价类；
-因为 `mulf` 是可采纳 producer，assignment 可以把整个等价类选成
-`deinterleaved=4`，从而让 load/broadcast/mulf 直接在这个 layout 下产生数据。
+因为 `vmul` 是可采纳 producer，assignment 可以把整个等价类选成
+`deinterleaved=4`，从而让 load/broadcast/vmul 直接在这个 layout 下产生数据。
 
 控制流边界也会形成等价类，但它不是任意 request 的自动传播通道：
 
@@ -498,7 +510,7 @@ consumer %x_req
 这个规则也处理多 consumer 冲突：
 
 ```mlir
-%y = pto.vmi.mulf %x, %k
+%y = pto.vmi.vmul %x, %k
 pto.vmi.store %y, %out0      // wants contiguous
 %q = pto.vmi.truncf %y       // wants deinterleaved=4 source
 ```
@@ -621,13 +633,13 @@ control-flow results
 ```mlir
 %a_dense = pto.vmi.ensure_layout %a : deinterleaved=2 -> contiguous
 %b_dense = pto.vmi.ensure_layout %b : deinterleaved=2 -> contiguous
-%y_dense = pto.vmi.addf %a_dense, %b_dense : contiguous
+%y_dense = pto.vmi.vadd %a_dense, %b_dense : contiguous
 ```
 
 变换后：
 
 ```mlir
-%y_split = pto.vmi.addf %a, %b : deinterleaved=2
+%y_split = pto.vmi.vadd %a, %b : deinterleaved=2
 %y_dense = pto.vmi.ensure_layout %y_split : deinterleaved=2 -> contiguous
 ```
 
@@ -891,7 +903,7 @@ VMI 通过 mask 表达 tail，不通过 padding 表达 tail。
 ```mlir
 %mask = pto.vmi.create_mask %active_lanes
 %x = pto.vmi.masked_load %src[%off], %mask
-%y = pto.vmi.mulf %x, %scale
+%y = pto.vmi.vmul %x, %scale
 pto.vmi.masked_store %y, %dst[%off], %mask
 ```
 

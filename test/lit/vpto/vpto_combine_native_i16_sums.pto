@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: pto-test-opt %s -vpto-combine-reductions | FileCheck %s
+
+module {
+  // CHECK-LABEL: func.func @preserve_native_si16_b16(
+  // CHECK: %[[A:.*]] = pto.vcgadd %arg0, %arg2
+  // CHECK: %[[B:.*]] = pto.vcgadd %arg1, %arg2
+  // CHECK: %[[SUM:.*]] = pto.vadd %[[A]], %[[B]], %arg3
+  // CHECK: return %[[SUM]]
+  func.func @preserve_native_si16_b16(
+      %a: !pto.vreg<128xsi16>, %b: !pto.vreg<128xsi16>,
+      %input_mask: !pto.mask<b16>, %slot_mask: !pto.mask<b16>)
+      -> !pto.vreg<128xsi16> {
+    %a_sum = pto.vcgadd %a, %input_mask : !pto.vreg<128xsi16>, !pto.mask<b16> -> !pto.vreg<128xsi16>
+    %b_sum = pto.vcgadd %b, %input_mask : !pto.vreg<128xsi16>, !pto.mask<b16> -> !pto.vreg<128xsi16>
+    %sum = pto.vadd %a_sum, %b_sum, %slot_mask : !pto.vreg<128xsi16>, !pto.vreg<128xsi16>, !pto.mask<b16> -> !pto.vreg<128xsi16>
+    return %sum : !pto.vreg<128xsi16>
+  }
+  // CHECK-LABEL: func.func @preserve_native_ui16_b32(
+  // CHECK: %[[A:.*]] = pto.vcgadd %arg0, %arg2
+  // CHECK: %[[B:.*]] = pto.vcgadd %arg1, %arg2
+  // CHECK: %[[SUM:.*]] = pto.vadd %[[A]], %[[B]], %arg3
+  // CHECK: return %[[SUM]]
+  func.func @preserve_native_ui16_b32(
+      %a: !pto.vreg<128xui16>, %b: !pto.vreg<128xui16>,
+      %input_mask: !pto.mask<b32>, %slot_mask: !pto.mask<b16>)
+      -> !pto.vreg<128xui16> {
+    %a_sum = pto.vcgadd %a, %input_mask : !pto.vreg<128xui16>, !pto.mask<b32> -> !pto.vreg<128xui16>
+    %b_sum = pto.vcgadd %b, %input_mask : !pto.vreg<128xui16>, !pto.mask<b32> -> !pto.vreg<128xui16>
+    %sum = pto.vadd %a_sum, %b_sum, %slot_mask : !pto.vreg<128xui16>, !pto.vreg<128xui16>, !pto.mask<b16> -> !pto.vreg<128xui16>
+    return %sum : !pto.vreg<128xui16>
+  }
+}

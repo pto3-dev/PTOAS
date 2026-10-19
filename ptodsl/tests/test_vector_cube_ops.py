@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -6,18 +7,20 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 
-import unittest
 import inspect
+import unittest
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call, patch
 
+from ptoas.mlir.dialects import pto as pto_dialect
+from ptoas.mlir.ir import F32Type, IntegerType, Type
+
+from ptodsl import pto
 import ptodsl._ops as _ops
 import ptodsl._pipe_namespace as _pipe_namespace
 from ptodsl._context import make_context
 from ptodsl._diagnostics import PTODSLDeprecationWarning
-from ptodsl import pto
-from ptoas.mlir.ir import F32Type, IntegerType, Type
-
 import ptodsl._ops_common as _ops_common
 import ptodsl._ops_core as _ops_core
 import ptodsl._ops_vmem as _ops_vmem
@@ -26,7 +29,6 @@ import ptodsl._ops_vmath as _ops_vmath
 import ptodsl._ops_tile as _ops_tile
 import ptodsl._ops_mte as _ops_mte
 import ptodsl._ops_simt as _ops_simt
-from contextlib import ExitStack, contextmanager
 
 _OPS_FAMILY = (
     _ops, _ops_common, _ops_core, _ops_vmem, _ops_mask,
@@ -267,7 +269,7 @@ class VectorCubeSurfaceTest(unittest.TestCase):
         names = [
             "vsub", "vmin", "vand", "vor", "vxor", "vshl", "vshr",
             "vln", "vsqrt", "vabs", "vneg", "vrec", "vrsqrt", "vrelu", "vnot",
-            "vsqz",
+            "vsqz", "vusqz", "vunpack", "dhistv2",
             "vcmin", "vcgmin", "vcpadd",
             "vadds", "vmuls", "vmaxs", "vmins", "vlrelu", "vshls", "vshrs", "vands", "vors", "vxors",
             "vaxpy", "vmula", "vci", "vaddrelu", "vsubrelu", "vsel",
@@ -424,6 +426,7 @@ class VectorCubeSurfaceTest(unittest.TestCase):
         preferred_names = [
             "set_cross_block", "wait_cross_block",
             "set_intra_block", "wait_intra_block",
+            "syncall",
         ]
         legacy_names = [
             "set_cross_flag", "wait_cross_flag",
@@ -441,6 +444,127 @@ class VectorCubeSurfaceTest(unittest.TestCase):
     def test_cross_block_sync_rejects_ffts_mode(self):
         with self.assertRaises(TypeError):
             _ops.set_cross_block(pto.Pipe.FIX, 0, ffts_mode=2)
+
+    def test_cross_block_scalar_wait_requires_a5_and_forwards(self):
+        with patch_ops("_require_target_arch") as require_target_arch, \
+             patch_ops("_pipe_attr", return_value="pipe-s"), \
+             patch("ptodsl._ops_simt._pto.wait_cross_block") as wait_op:
+            _ops.wait_cross_block(pto.Pipe.S, 14)
+
+        require_target_arch.assert_called_once_with(
+            "wait_cross_block(Pipe.S, event_id)", {"a5"}
+        )
+        wait_op.assert_called_once_with("pipe-s", 14)
+
+    def test_syncall_rejects_invalid_surface_contracts(self):
+        cases = [
+            ({"mode": "invalid", "core_type": "aiv_only"}, "expected hard or soft"),
+            (
+                {"mode": "hard", "core_type": "invalid"},
+                "expected aiv_only, aic_only, or mix",
+            ),
+            (
+                {"mode": "hard", "core_type": "aiv_only", "gm_workspace": object()},
+                "does not accept gm_workspace or used_cores",
+            ),
+            ({"mode": "soft", "core_type": "aiv_only"}, "requires gm_workspace"),
+        ]
+
+        for kwargs, expected in cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError) as exc:
+                    _ops.syncall(**kwargs)
+                self.assertIn(expected, str(exc.exception))
+
+        with self.assertRaises(TypeError):
+            _ops.syncall()
+
+    def test_syncall_hard_paths_forward_attributes(self):
+        attr = SimpleNamespace(parse=lambda text: text)
+
+        with patch.object(_ops_simt, "Attribute", attr), \
+             patch("ptodsl._ops_simt._pto.syncall") as syncall_op:
+            _ops.syncall(mode="hard", core_type="aiv_only")
+            _ops.syncall(mode="hard", core_type="aic_only")
+            _ops.syncall(mode="hard", core_type="mix")
+
+        self.assertEqual(
+            syncall_op.call_args_list,
+            [
+                call("#pto.sync_all_mode<hard>", "#pto.sync_core_type<aiv_only>"),
+                call("#pto.sync_all_mode<hard>", "#pto.sync_core_type<aic_only>"),
+                call("#pto.sync_all_mode<hard>", "#pto.sync_core_type<mix>"),
+            ],
+        )
+
+    def test_syncall_soft_static_used_cores_forwards_operands(self):
+        attr = SimpleNamespace(parse=lambda text: text)
+        workspace = object()
+        raw_workspace = object()
+
+        with patch.object(_ops_simt, "Attribute", attr), \
+             patch_ops("unwrap_surface_value", return_value=raw_workspace), \
+             patch_ops(
+                 "_coerce_i32_operand",
+                 side_effect=lambda value, *, context: f"i32:{value}",
+             ), \
+             patch("ptodsl._ops_simt._pto.syncall") as syncall_op:
+            _ops.syncall(
+                mode="soft",
+                core_type="aiv_only",
+                gm_workspace=workspace,
+                used_cores=4,
+            )
+
+        syncall_op.assert_called_once_with(
+            "#pto.sync_all_mode<soft>",
+            "#pto.sync_core_type<aiv_only>",
+            gm_workspace=raw_workspace,
+            used_cores="i32:4",
+        )
+
+    def test_syncall_soft_dynamic_and_omitted_used_cores_forward(self):
+        attr = SimpleNamespace(parse=lambda text: text)
+        workspace = object()
+        raw_workspace = object()
+        dynamic_used_cores = object()
+        coerced_dynamic_used_cores = object()
+
+        with patch.object(_ops_simt, "Attribute", attr), \
+             patch_ops("unwrap_surface_value", return_value=raw_workspace), \
+             patch_ops(
+                 "_coerce_i32_operand",
+                 return_value=coerced_dynamic_used_cores,
+             ), \
+             patch("ptodsl._ops_simt._pto.syncall") as syncall_op:
+            _ops.syncall(
+                mode="soft",
+                core_type="aic_only",
+                gm_workspace=workspace,
+                used_cores=dynamic_used_cores,
+            )
+            _ops.syncall(
+                mode="soft",
+                core_type="mix",
+                gm_workspace=workspace,
+            )
+
+        self.assertEqual(
+            syncall_op.call_args_list,
+            [
+                call(
+                    "#pto.sync_all_mode<soft>",
+                    "#pto.sync_core_type<aic_only>",
+                    gm_workspace=raw_workspace,
+                    used_cores=coerced_dynamic_used_cores,
+                ),
+                call(
+                    "#pto.sync_all_mode<soft>",
+                    "#pto.sync_core_type<mix>",
+                    gm_workspace=raw_workspace,
+                ),
+            ],
+        )
 
     def test_direct_vector_wrappers_dispatch_to_generated_ops(self):
         lhs = SimpleNamespace(type="vec_ty")
@@ -464,7 +588,6 @@ class VectorCubeSurfaceTest(unittest.TestCase):
             ("vneg", "VnegOp", (lhs, mask)),
             ("vrelu", "VreluOp", (lhs, mask)),
             ("vnot", "VnotOp", (lhs, mask)),
-            ("vcmin", "VcminOp", (lhs, mask)),
             ("vcpadd", "VcpaddOp", (lhs, mask)),
         ]
 
@@ -568,6 +691,92 @@ class VectorCubeSurfaceTest(unittest.TestCase):
 
         self.assertIs(output, result)
         op_ctor.assert_called_once_with("vec_ty", inp, mask)
+
+    def test_vusqz_dispatches_to_generated_op_with_source_type(self):
+        inp = SimpleNamespace(type="vec_ty")
+        mask = SimpleNamespace(type="mask_ty")
+        result = object()
+
+        with patch_ops(
+            "unwrap_surface_value", side_effect=_identity
+        ), patch_ops(
+            "wrap_surface_value", side_effect=_identity
+        ), patch.object(
+            pto_dialect,
+            "VusqzOp",
+            return_value=SimpleNamespace(result=result),
+        ) as op_ctor:
+            output = pto.vusqz(inp, mask)
+
+        self.assertIs(output, result)
+        op_ctor.assert_called_once_with("vec_ty", inp, mask)
+
+    def test_dhistv2_dispatches_like_chistv2(self):
+        acc = SimpleNamespace(type="acc_ty")
+        source = SimpleNamespace(type="source_ty")
+        mask = SimpleNamespace(type="mask_ty")
+        bin_val = SimpleNamespace(type="i32")
+        result = object()
+
+        with patch_ops(
+            "unwrap_surface_value", side_effect=_identity
+        ), patch_ops(
+            "wrap_surface_value", side_effect=_identity
+        ), patch.object(
+            pto_dialect,
+            "Dhistv2Op",
+            return_value=SimpleNamespace(result=result),
+        ) as op_ctor:
+            output = pto.dhistv2(acc, source, mask, bin_val)
+
+        self.assertIs(output, result)
+        op_ctor.assert_called_once_with("acc_ty", acc, source, mask, bin_val)
+
+    def assert_vunpack_dispatch(self, dtype, lanes, expected_type, op_name):
+        with make_context():
+            src = SimpleNamespace(type=pto.vreg_type(lanes, dtype).resolve())
+            part = object()
+            coerced_part = object()
+            result = object()
+            with patch_ops(
+                "unwrap_surface_value", side_effect=_identity
+            ), patch_ops(
+                "wrap_surface_value", side_effect=_identity
+            ), patch_ops(
+                "_coerce_vunpack_part", return_value=coerced_part
+            ), patch.object(
+                pto_dialect,
+                op_name,
+                return_value=SimpleNamespace(result=result),
+            ) as op_ctor:
+                output = pto.vunpack(src, part)
+
+            self.assertIs(output, result)
+            self.assertEqual(str(op_ctor.call_args.args[0]), expected_type)
+            self.assertIs(op_ctor.call_args.args[1], src)
+            self.assertIs(op_ctor.call_args.args[2], coerced_part)
+
+    def test_vunpack_infers_width_and_selects_extension_from_signedness(self):
+        cases = [
+            (pto.si8, 256, "!pto.vreg<128xsi16>", "VsunpackOp"),
+            (pto.ui8, 256, "!pto.vreg<128xui16>", "VzunpackOp"),
+            (pto.i16, 128, "!pto.vreg<64xui32>", "VzunpackOp"),
+        ]
+        for dtype, lanes, expected_type, op_name in cases:
+            with self.subTest(dtype=dtype):
+                self.assert_vunpack_dispatch(dtype, lanes, expected_type, op_name)
+
+    def test_vunpack_rejects_unsupported_source_width(self):
+        with make_context():
+            src = SimpleNamespace(type=pto.vreg_type(64, pto.ui32).resolve())
+            with self.assertRaisesRegex(TypeError, "currently supports only"):
+                pto.vunpack(src, 0)
+
+    def test_vunpack_rejects_invalid_static_part(self):
+        with make_context():
+            src = SimpleNamespace(type=pto.vreg_type(256, pto.ui8).resolve())
+            with self.assertRaisesRegex(ValueError, "part 0 .* or 1"):
+                pto.vunpack(src, 2)
 
     def test_vcgmin_and_vsel_dispatch_correctly(self):
         vec = SimpleNamespace(type="vec_ty")
@@ -1523,7 +1732,7 @@ class VectorCubeSurfaceTest(unittest.TestCase):
                 _ops.wait_cross_block,
                 (pto.Pipe.M, 0),
                 "wait_cross_block(pipe, event_id)",
-                "<PIPE_FIX>, <PIPE_MTE1>, <PIPE_MTE2>, <PIPE_MTE3>, <PIPE_V>",
+                "<PIPE_FIX>, <PIPE_MTE1>, <PIPE_MTE2>, <PIPE_MTE3>, <PIPE_S>, <PIPE_V>",
                 "<PIPE_M>",
             ),
             (
@@ -1558,17 +1767,20 @@ class VectorCubeSurfaceTest(unittest.TestCase):
 
     def test_intra_sync_mixed_writeback_event_ranges(self):
         dynamic_event = object()
-        dynamic_event_operand = object()
-        with patch_ops("_pipe_attr", side_effect=lambda pipe: f"pipe:{pipe}") as pipe_attr, \
-             patch_ops("unwrap_surface_value", return_value=dynamic_event_operand) as unwrap_surface_value, \
-             patch.object(_ops._pto, "set_intra_block") as set_intra_block_op, \
-             patch.object(_ops._pto, "wait_intra_block") as wait_intra_block_op:
-            _ops.set_intra_block(pto.Pipe.FIX, 31)
-            _ops.set_intra_block(pto.Pipe.MTE3, 31)
-            _ops.wait_intra_block(pto.Pipe.FIX, 16)
-            _ops.wait_intra_block(pto.Pipe.V, 31)
-            _ops.wait_intra_block(pto.Pipe.MTE3, 31)
-            _ops.wait_intra_block(pto.Pipe.MTE3, dynamic_event)
+        with make_context():
+            dynamic_event_operand = SimpleNamespace(
+                type=IntegerType.get_signless(32)
+            )
+            with patch_ops("_pipe_attr", side_effect=lambda pipe: f"pipe:{pipe}") as pipe_attr, \
+                 patch_ops("unwrap_surface_value", return_value=dynamic_event_operand) as unwrap_surface_value, \
+                 patch("ptodsl._ops._pto.set_intra_block") as set_intra_block_op, \
+                 patch("ptodsl._ops._pto.wait_intra_block") as wait_intra_block_op:
+                _ops.set_intra_block(pto.Pipe.FIX, 31)
+                _ops.set_intra_block(pto.Pipe.MTE3, 31)
+                _ops.wait_intra_block(pto.Pipe.FIX, 16)
+                _ops.wait_intra_block(pto.Pipe.V, 31)
+                _ops.wait_intra_block(pto.Pipe.MTE3, 31)
+                _ops.wait_intra_block(pto.Pipe.MTE3, dynamic_event)
 
         self.assertEqual(pipe_attr.call_count, 6)
         self.assertEqual(set_intra_block_op.call_count, 2)

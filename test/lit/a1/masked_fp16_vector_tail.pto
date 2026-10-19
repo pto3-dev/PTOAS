@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: ptoas --pto-arch=a1 --plan-memory-impl=modern %s -o - | FileCheck %s
-// RUN: ptoas --plan-memory-impl=legacy %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
 // RUN: not ptoas --enable-insert-sync=false %s -o - 2>&1 | FileCheck %s --check-prefix=NO-SYNC
 // RUN: ptoas --enable-inject-barrier-all-sync %s -o - | FileCheck %s --check-prefix=BARRIER
 // RUN: ptoas --pto-arch=A1 --emit-pto-ir %s -o - | FileCheck %s --check-prefix=IR

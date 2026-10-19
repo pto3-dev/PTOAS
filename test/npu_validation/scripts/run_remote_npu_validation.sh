@@ -14,18 +14,19 @@ RUN_MODE="${RUN_MODE:-npu}"   # npu|sim
 SOC_VERSION="${SOC_VERSION:-Ascend910}"
 GOLDEN_MODE="${GOLDEN_MODE:-npu}"  # sim|npu|skip
 PTO_ISA_REPO="${PTO_ISA_REPO:-https://gitcode.com/cann/pto-isa.git}"
-PTO_ISA_COMMIT="${PTO_ISA_COMMIT:-ce3262e3825a235f951917eeada30e52910b6a84}"
+PTO_ISA_COMMIT="${PTO_ISA_COMMIT:-5649f0522ba9987fd22cbf18923b729b97c5f2ff}"
 DEVICE_ID="${DEVICE_ID:-}"
 SKIP_CASES="${SKIP_CASES:-}"          # comma/space separated testcase names
 RUN_ONLY_CASES="${RUN_ONLY_CASES:-}"  # comma/space separated testcase names or model groups
 
 log() { echo "[$(date +'%F %T')] $*"; }
 
-# PreSmoke performs package and sample/codegen checks in its smoke task. The
-# separate NPU validation command is not part of that gate and can submit a
-# full board sweep; stop it here while leaving explicit board workflows intact.
-if [[ "${SMOKE_TYPE:-}" == "pre" ]]; then
-  log "Skipping remote NPU validation in PreSmoke (SMOKE_TYPE=pre)"
+# Both CI drivers invoke this command after preparing the PreSmoke package.
+# PreSmoke no longer submits a board sweep; explicit board workflows retain
+# the full validation path. The robot job name also survives wrappers that do
+# not export SMOKE_TYPE to this child shell.
+if [[ "${SMOKE_TYPE:-}" == "pre" || "${ST_PART:-}" == "1" || "${task_name:-}" == PreSmoke_* ]]; then
+  log "Skipping remote NPU validation in PreSmoke (SMOKE_TYPE, ST_PART, or task_name)"
   log "execute samples success"
   exit 0
 fi
@@ -818,6 +819,12 @@ while IFS= read -r -d '' cpp; do
     --soc-version "${SIM_SOC_VERSION}"
   gen_rc=$?
   set -euo pipefail
+  if [[ $gen_rc -eq 77 ]]; then
+    skip_count=$((skip_count + 1))
+    printf "%s\tSKIP\tgen\tTile-only device helper has no host-callable entry\n" "${case_id}" >> "${RESULTS_TSV}"
+    log "SKIP: ${testcase} (compile-only Tile helper; use the GM-pointer runtime sample)"
+    continue
+  fi
   if [[ $gen_rc -ne 0 ]]; then
     status=1
     fail_count=$((fail_count + 1))

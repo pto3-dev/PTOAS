@@ -11,10 +11,12 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-#include "PTO/Support/A1Target.h"
-#include <algorithm>
-#include "PTO/Transforms/InsertSync/SyncCommon.h"
 #include "PTO/Transforms/InsertSync/SyncEventIdAllocation.h"
+#include "PTO/Support/A1Target.h"
+
+#include <algorithm>
+
+#include "PTO/Transforms/InsertSync/SyncCommon.h"
 #include "PTO/Transforms/InsertSync/SyncMacroModel.h"
 
 
@@ -106,7 +108,7 @@ void SyncEventIdAllocation::reserveBlockAllEventIds() {
   }
 }
 
-void SyncEventIdAllocation::SetBlockSyncAllEventID(SyncOperation *sync) {
+void SyncEventIdAllocation::SetBlockSyncAllEventID(SyncOperation *sync) const {
   if (sync->syncCoreType == TCoreType::CUBE) {
     sync->eventIds.push_back(kBlockSyncAllCubeEventId);
   } else if (sync->syncCoreType == TCoreType::VECTOR) {
@@ -136,7 +138,8 @@ void SyncEventIdAllocation::AllocateEventId(const InstanceElement *e) {
   }
 }
 
-size_t SyncEventIdAllocation::GetCompilerAvailableEventIdNum(const SyncOperation *sync) {
+size_t SyncEventIdAllocation::GetCompilerAvailableEventIdNum(
+    const SyncOperation *sync) const {
   if (sync->GetType() == SyncOperation::TYPE::SYNC_BLOCK_SET ||
       sync->GetType() == SyncOperation::TYPE::SYNC_BLOCK_WAIT) {
     return kBlockSyncSetWaitEventIdNum - reservedBlockSyncEventIdNum;
@@ -149,6 +152,11 @@ size_t SyncEventIdAllocation::GetCompilerAvailableEventIdNum(const SyncOperation
     return kTotalEventIdNum - it->second;
   }
   return kTotalEventIdNum;
+}
+
+uint64_t SyncEventIdAllocation::GetReservedEventIdNum(PipelineType src, PipelineType dst) {
+  auto it = reservedEventIdNum.find({src, dst});
+  return it == reservedEventIdNum.end() ? 0 : it->second;
 }
 
 void SyncEventIdAllocation::SetEventId(SyncOperation *sync) {
@@ -179,18 +187,22 @@ void SyncEventIdAllocation::SetEventId(SyncOperation *sync) {
     for (auto &id : canAllocaEventId) {
       SetEventPool(sync, id);
     }
-  } else if (reallocatedPipePair.count(ScopePair(sync)) &&
+  } else if (!sync->slotBoundaryMasks &&
+             reallocatedPipePair.contains(ScopePair(sync)) &&
              (canAllocaEventId.size() < idSize)) {
     // Reallocate strategy: reduce usage to 1
     assert(canAllocaEventId.size() > 0);
     SetEventPool(sync, canAllocaEventId[0]);
     sync->eventIdNum = 1;
   }
+  // A proven rotation must retain one token per lane. If its pool is full,
+  // leave the group unallocated for the existing full-barrier fallback.
 }
 
 SmallVector<int> SyncEventIdAllocation::UpdateBlockAvailableEventId(
-    SyncOperation *sync, SmallVector<bool> eventIdLifetimeAvailableStatus,
-    size_t eventIdNum) {
+    const SyncOperation *sync,
+    SmallVector<bool> eventIdLifetimeAvailableStatus,
+    size_t eventIdNum) const {
   SmallVector<int> canAllocaEventId;
   size_t idSize = static_cast<size_t>(sync->eventIdNum);
   for (unsigned id = 0; id < eventIdNum; id++) {
@@ -210,7 +222,7 @@ SmallVector<int> SyncEventIdAllocation::UpdateBlockAvailableEventId(
 
 SmallVector<int> SyncEventIdAllocation::GetAvailableEventId(
     SyncOperation *sync, SmallVector<bool> eventIdLifetimeAvailableStatus,
-    SmallVector<bool> eventIdIdleStatus, size_t eventIdNum) {
+    SmallVector<bool> eventIdIdleStatus, size_t eventIdNum) const {
   SmallVector<int> canAllocaEventId;
   size_t idSize = static_cast<size_t>(sync->eventIdNum);
   if (sync->GetType() == SyncOperation::TYPE::SYNC_BLOCK_SET ||
@@ -263,7 +275,7 @@ SmallVector<bool> SyncEventIdAllocation::GetEventPool(const SyncOperation *sync,
   auto *waitFlag = syncPair[1].get();
 
   if (setFlag->GetForEndIndex().has_value()) {
-    if (reallocatedPipePair.count(ScopePair(sync))) {
+    if (reallocatedPipePair.contains(ScopePair(sync))) {
       auto *ptr = dyn_cast<LoopInstanceElement>(
           syncIR_[setFlag->GetForEndIndex().value()].get());
       assert(ptr != nullptr);
@@ -278,7 +290,7 @@ SmallVector<bool> SyncEventIdAllocation::GetEventPool(const SyncOperation *sync,
   return eventIdPool;
 }
 
-int SyncEventIdAllocation::ScopePair(const SyncOperation *s) {
+int SyncEventIdAllocation::ScopePair(const SyncOperation *s) const {
   if (s->GetType() == SyncOperation::TYPE::SYNC_BLOCK_SET ||
       s->GetType() == SyncOperation::TYPE::SYNC_BLOCK_WAIT) {
     return 0;
@@ -378,7 +390,7 @@ void SyncEventIdAllocation::SetEventPool(const SyncOperation *sync,
   auto &waitFlag = syncPair[1];
 
   if (setFlag->GetForEndIndex().has_value()) {
-    if (reallocatedPipePair.count(ScopePair(sync))) {
+    if (reallocatedPipePair.contains(ScopePair(sync))) {
       auto *ptr = dyn_cast<LoopInstanceElement>(
           syncIR_[setFlag->GetForEndIndex().value()].get());
       assert(ptr != nullptr);
@@ -394,6 +406,46 @@ void SyncEventIdAllocation::SetEventPool(const SyncOperation *sync,
   // UpdateBackwardMatchSync 只处理回边同步，通常不需要 Phantom Set 参与
   if (setFlag->GetForEndIndex().has_value()) {
     UpdateBackwardMatchSync(setFlag.get(), waitFlag.get(), eventId);
+  }
+}
+
+void SyncEventIdAllocation::InsertBackwardMatchBoundarySyncs(
+    const SyncOperation *setFlag, SyncOperation &syncFront,
+    SyncOperation &syncEnd) {
+  bool primeSlot = true;
+  bool drainSlot = true;
+  if (setFlag->slotBoundaryMasks) {
+    size_t laneCount = setFlag->eventIds.size();
+    checkCondition(laneCount > 0 && laneCount <= kMaxMultiBufferCount,
+                   "invalid allocated slot lane for event boundaries");
+    uint32_t lane = uint32_t{1} << (laneCount - 1);
+    primeSlot = (setFlag->slotBoundaryMasks->prime & lane) != 0;
+    drainSlot = (setFlag->slotBoundaryMasks->drain & lane) != 0;
+  }
+
+  if (setFlag->slotBoundaryMasks || reallocatedPipePair.contains(ScopePair(setFlag))) {
+    auto *ptr = dyn_cast<LoopInstanceElement>(
+        syncIR_[setFlag->GetForEndIndex().value()].get());
+    checkCondition(ptr != nullptr,
+                   "invalid loop element for event boundaries");
+    syncFront.SetSyncIRIndex(ptr->beginId);
+    syncEnd.SetSyncIRIndex(ptr->endId);
+    syncFront.reallocatedLoopHeadTailSync = !setFlag->slotBoundaryMasks;
+    syncEnd.reallocatedLoopHeadTailSync = !setFlag->slotBoundaryMasks;
+    if (primeSlot) {
+      syncIR_[ptr->beginId]->pipeBefore.push_back(&syncFront);
+    }
+    // Insert the synthetic tail wait ahead of existing loop-end sets so the
+    // loop tail anchor does not emit a new set before consuming the carried
+    // event of the previous iteration.
+    if (drainSlot) {
+      syncIR_[ptr->endId]->pipeAfter.push_front(&syncEnd);
+    }
+  } else {
+    syncFront.SetSyncIRIndex(0);
+    syncEnd.SetSyncIRIndex(syncIR_.size() - 1);
+    syncIR_[0]->pipeBefore.push_back(&syncFront);
+    syncIR_[syncIR_.size() - 1]->pipeAfter.push_back(&syncEnd);
   }
 }
 
@@ -418,26 +470,7 @@ void SyncEventIdAllocation::UpdateBackwardMatchSync(
   syncEnd->syncCoreType = waitFlag->syncCoreType;
   syncFront->eventIds.push_back(eventId);
   syncEnd->eventIds.push_back(eventId);
-
-  if (reallocatedPipePair.count(ScopePair(setFlag))) {
-    auto *ptr = dyn_cast<LoopInstanceElement>(
-        syncIR_[setFlag->GetForEndIndex().value()].get());
-    assert(ptr != nullptr);
-    syncFront->SetSyncIRIndex(ptr->beginId);
-    syncEnd->SetSyncIRIndex(ptr->endId);
-    syncFront->reallocatedLoopHeadTailSync = true;
-    syncEnd->reallocatedLoopHeadTailSync = true;
-    syncIR_[ptr->beginId]->pipeBefore.push_back(syncFront.get());
-    // Insert the synthetic tail wait ahead of existing loop-end sets so the
-    // loop tail anchor does not emit a new set before consuming the carried
-    // event of the previous iteration.
-    syncIR_[ptr->endId]->pipeAfter.push_front(syncEnd.get());
-  } else {
-    syncFront->SetSyncIRIndex(0);
-    syncEnd->SetSyncIRIndex(syncIR_.size() - 1);
-    syncIR_[0]->pipeBefore.push_back(syncFront.get());
-    syncIR_[syncIR_.size() - 1]->pipeAfter.push_back(syncEnd.get());
-  }
+  InsertBackwardMatchBoundarySyncs(setFlag, *syncFront, *syncEnd);
 
   insertedBackwardSync.insert(syncFront.get());
   insertedBackwardSync.insert(syncEnd.get());
@@ -620,7 +653,7 @@ void SyncEventIdAllocation::ReallocatedEventId() {
   ClearReallocatedBackwardMatchSync();
   for (auto &e : syncIR_) {
     for (auto &sync : e->pipeBefore) {
-      if (!sync->isBarrierType() && reallocatedPipePair.count(ScopePair(sync))) {
+      if (!sync->isBarrierType() && reallocatedPipePair.contains(ScopePair(sync))) {
         ClearEventId(sync);
         SetEventId(sync);
       }
@@ -640,21 +673,17 @@ void SyncEventIdAllocation::ClearEventId(const SyncOperation *sync) {
 }
 
 void SyncEventIdAllocation::ClearReallocatedBackwardMatchSync() {
-  SyncOps newPipeBefore;
-  for (auto &sync : syncIR_[0]->pipeBefore) {
-    if (!(sync->isSyncSetType() && reallocatedPipePair.count(ScopePair(sync)))) {
-      newPipeBefore.push_back(sync);
+  // Proven rotations have boundaries at their loop, not the function ends.
+  // Remove only synthetic boundaries in the scopes being reallocated.
+  auto removeBoundary = [this](SyncOperation *sync) {
+    return insertedBackwardSync.contains(sync) &&
+           reallocatedPipePair.contains(ScopePair(sync));
+  };
+  for (auto &element : syncIR_) {
+    for (auto *syncList : {&element->pipeBefore, &element->pipeAfter}) {
+      syncList->erase(std::remove_if(syncList->begin(), syncList->end(), removeBoundary), syncList->end());
     }
   }
-  syncIR_[0]->pipeBefore = newPipeBefore;
-
-  SyncOps newPipeAfter;
-  for (auto &sync : syncIR_[syncIR_.size() - 1]->pipeAfter) {
-    if (!(sync->isSyncWaitType() && reallocatedPipePair.count(ScopePair(sync)))) {
-      newPipeAfter.push_back(sync);
-    }
-  }
-  syncIR_[syncIR_.size() - 1]->pipeAfter = newPipeAfter;
 }
 
 llvm::LogicalResult SyncEventIdAllocation::ChangeNoEventIdSyncToPipeAll() {
@@ -779,6 +808,10 @@ bool SyncEventIdAllocation::TryWidenByOtherSync(const SyncOperation *sync) {
 SyncOperation *
 SyncEventIdAllocation::FindWidenSync(const SyncOperation *setSync,
                                      const SyncOperation *waitSync) {
+  // The slot proof and its boundary masks depend on these exact endpoints.
+  if (setSync->slotBoundaryMasks) {
+    return nullptr;
+  }
   // Complex logic to find a compatible sync to widen (reuse ID)
   // Iterating backwards from setSync position
   int endIndex = 0;
@@ -809,7 +842,7 @@ SyncEventIdAllocation::FindWidenSync(const SyncOperation *setSync,
 
         bool sameLoopScope =
             (setSame->GetForEndIndex() == setSync->GetForEndIndex());
-        if (!isSameTypeSync || !sameLoopScope || setSame->uselessSync ||
+        if (!isSameTypeSync || !sameLoopScope || setSame->slotBoundaryMasks || setSame->uselessSync ||
             setSame->eventIds.empty()) {
           continue;
         }

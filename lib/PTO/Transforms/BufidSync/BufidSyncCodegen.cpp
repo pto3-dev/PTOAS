@@ -46,6 +46,48 @@ BufidSyncCodegen::getOpTypeAttr(Builder &builder,
   return pto::PipeEventTypeAttr::get(builder.getContext(), opType);
 }
 
+LogicalResult BufidSyncCodegen::emitGetBufs(Operation *op, IRRewriter &rewriter,
+                                            ArrayRef<BufSyncOperation> pipeBefore) {
+  for (auto &syncBefore : pipeBefore) {
+    int physicalId = idAlloc_.getLogicToPhysical().lookup(syncBefore.logicId);
+    auto syncOpType = mapPipelineToSyncOpType(syncBefore.pipe);
+    if (!syncOpType) {
+      op->emitError("bufid_sync cannot encode get_buf for unsupported pipe ")
+          << static_cast<int>(syncBefore.pipe);
+      return failure();
+    }
+
+    rewriter.setInsertionPoint(op);
+    auto opTypeAttr = getOpTypeAttr(rewriter, *syncOpType);
+    rewriter.create<pto::GetBufOp>(op->getLoc(), opTypeAttr,
+                                   static_cast<uint32_t>(physicalId), 0);
+  }
+  return success();
+}
+
+LogicalResult BufidSyncCodegen::emitRlsBufs(Operation *op, IRRewriter &rewriter,
+                                            ArrayRef<BufSyncOperation> pipeAfter) {
+  for (auto &syncAfter : pipeAfter) {
+    int physicalId = idAlloc_.getLogicToPhysical().lookup(syncAfter.logicId);
+    auto syncOpType = mapPipelineToSyncOpType(syncAfter.pipe);
+    if (!syncOpType) {
+      op->emitError("bufid_sync cannot encode rls_buf for unsupported pipe ")
+          << static_cast<int>(syncAfter.pipe);
+      return failure();
+    }
+
+    if (op->hasTrait<OpTrait::IsTerminator>()) {
+      rewriter.setInsertionPoint(op);
+    } else {
+      rewriter.setInsertionPointAfter(op);
+    }
+    Attribute opTypeAttr = getOpTypeAttr(rewriter, *syncOpType);
+    rewriter.create<pto::RlsBufOp>(op->getLoc(), opTypeAttr,
+                                   static_cast<uint32_t>(physicalId), 0);
+  }
+  return success();
+}
+
 LogicalResult BufidSyncCodegen::run() {
   MLIRContext *ctx = func_->getContext();
   IRRewriter rewriter(ctx);
@@ -79,40 +121,10 @@ LogicalResult BufidSyncCodegen::run() {
                                        static_cast<int>(b.pipe), b.logicId);
               });
 
-    for (auto &syncBefore : pipeBefore) {
-      int physicalId = idAlloc_.getLogicToPhysical().lookup(syncBefore.logicId);
-      auto syncOpType = mapPipelineToSyncOpType(syncBefore.pipe);
-      if (!syncOpType) {
-        op->emitError("bufid_sync cannot encode get_buf for unsupported pipe ")
-            << static_cast<int>(syncBefore.pipe);
-        return WalkResult::interrupt();
-      }
-
-      rewriter.setInsertionPoint(op);
-      auto opTypeAttr = getOpTypeAttr(rewriter, *syncOpType);
-      rewriter.create<pto::GetBufOp>(op->getLoc(), opTypeAttr,
-                                     static_cast<uint32_t>(physicalId), 0);
+    if (failed(emitGetBufs(op, rewriter, pipeBefore)) ||
+        failed(emitRlsBufs(op, rewriter, pipeAfter))) {
+      return WalkResult::interrupt();
     }
-
-    for (auto &syncAfter : pipeAfter) {
-      int physicalId = idAlloc_.getLogicToPhysical().lookup(syncAfter.logicId);
-      auto syncOpType = mapPipelineToSyncOpType(syncAfter.pipe);
-      if (!syncOpType) {
-        op->emitError("bufid_sync cannot encode rls_buf for unsupported pipe ")
-            << static_cast<int>(syncAfter.pipe);
-        return WalkResult::interrupt();
-      }
-
-      if (op->hasTrait<OpTrait::IsTerminator>()) {
-        rewriter.setInsertionPoint(op);
-      } else {
-        rewriter.setInsertionPointAfter(op);
-      }
-      Attribute opTypeAttr = getOpTypeAttr(rewriter, *syncOpType);
-      rewriter.create<pto::RlsBufOp>(op->getLoc(), opTypeAttr,
-                                     static_cast<uint32_t>(physicalId), 0);
-    }
-
     return WalkResult::advance();
   });
   return failure(walkResult.wasInterrupted());

@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,12 +6,12 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """PTODSL TileLib template for ``pto.trandom``."""
 
 from dataclasses import dataclass
 
 from ptodsl import pto
-from ptodsl import scalar
 import ptodsl.tilelib as tilelib
 
 
@@ -89,9 +90,9 @@ def _trandom_state_init(key0, key1, counter):
 def _trandom_advance_counter(state, valid_cols, lanes, repeats, repeat):
     """Advance the Philox counter by one lane-group after each repeat."""
     tail_counter_add = (valid_cols - 1) % lanes + 1
-    counter_add = scalar.select(
+    counter_add = pto.select(
         repeat == repeats - 1,
-        scalar.index_cast(pto.i32, tail_counter_add),
+        pto.cast(tail_counter_add, pto.i32),
         pto.const(lanes, dtype=pto.i32),
     )
     counter_add = pto.vbr(counter_add)

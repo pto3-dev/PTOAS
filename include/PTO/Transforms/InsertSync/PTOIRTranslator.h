@@ -21,6 +21,8 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <optional>
  
 namespace mlir {
 namespace pto {
@@ -66,6 +68,11 @@ private:
  
   // --- 递归遍历逻辑 ---
   void RecursionIR(Region *region);
+  // RecursionIR 的按类别分发器：返回 nullopt 表示 op 不属于该类别，
+  // 需继续尝试后续类别；返回 WalkResult 表示已匹配处理完毕。
+  std::optional<WalkResult> dispatchAllocOp(Operation *op);
+  std::optional<WalkResult> dispatchAliasViewOp(Operation *op);
+  std::optional<WalkResult> dispatchControlAndComputeOp(Operation *op);
  
   // --- 内存/Alias 分析 ---
   void UpdateKernelArgMemInfo();
@@ -78,7 +85,7 @@ private:
   void UpdateAliasBufferInfo(Value result, Value source);
   void UpdateConservativeAliasBufferInfo(Value result, Value source);
   void UpdateTileSubViewAliasBufferInfo(pto::SubViewOp op);
-  LogicalResult UpdateIntToPtrOpMemInfo(pto::IntToPtrOp op);
+  LogicalResult UpdateIntegerToPtrCastMemInfo(pto::CastPtrOp op);
   void UpdateMultiTileGetAliasBufferInfo(pto::MultiTileGetOp op);
   void UpdateSlotSelectedAliasBufferInfo(Value result, Value source,
                                          Value slot);
@@ -101,16 +108,16 @@ private:
   // --- 辅助函数 ---
 
   // 获取 PTO Op 对应的硬件流水线类型
-  PipelineType getOpPipeline(Operation *op);
- 
+  PipelineType getOpPipeline(Operation *op) const;
+
   // 根据 Values 填充 Def/Use 列表
   void UpdateDefUseVec(ValueRange values, SmallVector<const BaseMemInfo *> &vec);
- 
+
   // 调试辅助
-  std::string getPipelineName(PipelineType pipe);
-  void printMemInfoList(llvm::raw_ostream &os, 
-                        const SmallVector<const BaseMemInfo *> &list, 
-                        AsmState &state);
+  std::string getPipelineName(PipelineType pipe) const;
+  void printMemInfoList(llvm::raw_ostream &os,
+                        const SmallVector<const BaseMemInfo *> &list,
+                        AsmState &state) const;
 };
  
 } // namespace pto

@@ -1,0 +1,21 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software; you can redistribute it and/or modify it under
+// the terms and conditions of CANN Open Software License Agreement Version 2.0
+// (the "License"). This file is distributed on an "AS IS" BASIS, WITHOUT
+// WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+// License for the specific language governing permissions and limitations under
+// the License.
+
+// RUN: pto-test-opt %s -verify-diagnostics
+
+module {
+  func.func @vmula_i8_invalid(
+      %acc: !pto.vreg<256xi8>, %lhs: !pto.vreg<256xi8>,
+      %rhs: !pto.vreg<256xi8>, %mask: !pto.mask<b8>) -> !pto.vreg<256xi8> {
+    // expected-error@+1 {{'pto.vmula' op does not support i8/u8 VMULA on A5; use i16 or i32}}
+    %result = pto.vmula %acc, %lhs, %rhs, %mask
+        : !pto.vreg<256xi8>, !pto.vreg<256xi8>, !pto.vreg<256xi8>, !pto.mask<b8>
+        -> !pto.vreg<256xi8>
+    return %result : !pto.vreg<256xi8>
+  }
+}

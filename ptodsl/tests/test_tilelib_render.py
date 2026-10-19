@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """TileLib render abstraction-level test for pto.tadd.
 
 Asserts the rendered MLIR is *on par* with the tilelang golden
@@ -16,11 +18,12 @@ import json
 import unittest
 from pathlib import Path
 
+from TileOps.a5.elementwise.tadd import template_tadd
+
 from ptoas.mlir.dialects import pto as pto_dialect
 from ptoas.mlir.ir import Context
-from ptodsl.tilelib._compiler_runtime import materialize
 from ptodsl.tilelib import TileSpec, f32
-from TileOps.a5.tadd import template_tadd
+from ptodsl.tilelib._compiler_runtime import materialize
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tadd_a5_8x64_f32.golden.mlir"
 

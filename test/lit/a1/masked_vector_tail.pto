@@ -6,8 +6,8 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
-// RUN: ptoas --pto-arch=a1 --plan-memory-impl=modern %s -o - | FileCheck %s
-// RUN: ptoas --plan-memory-impl=legacy %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
 
 module attributes {pto.target_arch = "a1"} {
   func.func @a1_fp32_masked_add(%out: !pto.ptr<f32>, %lhs: !pto.ptr<f32>, %rhs: !pto.ptr<f32>) attributes {pto.entry} {

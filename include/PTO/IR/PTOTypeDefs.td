@@ -245,6 +245,37 @@ def TileBufType : TypeDef<PTO_Dialect, "TileBuf"> {
   }];
 }
 
+def ConvTileBufType : TypeDef<PTO_Dialect, "ConvTileBuf"> {
+  let mnemonic = "conv_tile_buf";
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    "mlir::Type":$elementType,
+    "mlir::IntegerAttr":$bufferSize,
+    "mlir::pto::AddressSpaceAttr":$memorySpace,
+    "mlir::pto::ConvLayoutAttr":$layout
+  );
+
+  let hasCustomAssemblyFormat = 1;
+  // The type carries only the storage identity (dtype, capacity, loc,
+  // layout, shape); the conv geometry lives on the allocating op's config
+  // attribute instead, so tiles with identical storage share one type.
+  // genVerifyDecl also constrains rank/layout/memory-space for every
+  // getChecked construction path (CAPI and Python bindings).
+  let genVerifyDecl = 1;
+
+  let extraClassDeclaration = [{
+    int64_t getRank() const { return getShape().size(); }
+    int64_t getDimSize(unsigned idx) const { return getShape()[idx]; }
+    int64_t getNumElements() const {
+      int64_t num = 1;
+      for (int64_t dim : getShape()) num *= dim;
+      return num;
+    }
+
+    int64_t getBufferSizeValue() const { return getBufferSize().getInt(); }
+  }];
+}
+
 // =============================================================================
 // MultiTileBufType
 // =============================================================================
@@ -294,14 +325,13 @@ def EventIdArrayType : TypeDef<PTO_Dialect, "EventIdArray"> {
 }
 
 // ---- !pto.local_array<D1 x D2 x ... x Dk x T> ----
-// Statically-shaped C++ stack-local array. Lowers to a plain `T a[D1][D2]...;`
-// declaration in the emitted C++. Element type is restricted to scalars
-// (integer / float). This type does NOT participate in PTO memory planning
-// lowering; the underlying address is decided by the
-// host C++ compiler, not by PTOAS.
+// Statically-shaped stack-local array. Lowers to a plain `T a[D1][D2]...;`
+// declaration in emitted C++ or equivalent LLVM stack storage. Element type is
+// restricted to scalars (integer / float). This type does NOT participate in
+// PTO memory planning lowering; its storage is owned by the enclosing function.
 def LocalArrayType : TypeDef<PTO_Dialect, "LocalArray"> {
   let mnemonic = "local_array";
-  let summary = "C++ stack-local statically-sized array";
+  let summary = "Stack-local statically-sized scalar array";
   let parameters = (ins
     ArrayRefParameter<"int64_t">:$shape,
     "mlir::Type":$elementType

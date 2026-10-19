@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """PTO operation wrappers.
 
 Every function in this module emits one or more MLIR operations at the
@@ -20,77 +22,7 @@ Design rules:
   pointer's element type.
 - ``partition_view`` infers the PartitionTensorViewType from the source type."""
 
-from functools import wraps
-import warnings
-from ._diagnostics import (
-    PTODSLDeprecationWarning,
-    explicit_mode_required_with_context_error,
-    make_tensor_view_invalid_layout_error,
-    make_tensor_view_missing_metadata_error,
-    tile_row_alignment_error,
-)
-from ._host_tensors import resolve_tensor_data_entry
-from ._scalar_coercion import coerce_scalar_to_type, materialize_scalar_literal
-from ._scalar_adaptation import (
-    classify_runtime_scalar_type,
-    coerce_runtime_i1_value,
-    coerce_runtime_index_value,
-    coerce_runtime_integer_value,
-)
-from ._runtime_scalar_ops import emit_runtime_binary_op
-from ._surface_values import (
-    AllocatedBufferValue,
-    MaskResultValue,
-    PartitionTensorViewValue,
-    TensorViewValue,
-    TileSliceValue,
-    TileValue,
-    _coerce_index_value,
-    _static_index_dims,
-    _unwrap_sequence,
-    compose_partition_spec,
-    emit_as_ptr,
-    infer_tile_element_type,
-    is_runtime_scalar_ir_type,
-    parse_tile_type_metadata,
-    resolve_address_access,
-    unwrap_surface_value,
-    wrap_surface_value,
-)
-from ._types import (
-    _is_struct_type,
-    _isinstance_pto_type,
-    _materialize_integer_literal,
-    _normalize_address_space,
-    _resolve,
-    _strip_integer_signedness,
-    mask_type,
-    part_tensor_view_type,
-    part_tensor_view_type_from_dims,
-    ptr,
-    tensor_view_type,
-    tensor_view_type_from_dims,
-    vreg_type,
-)
-from ptoas.mlir.dialects import arith, pto as _pto
-from ptoas.mlir.ir import (
-    Attribute,
-    BF16Type,
-    F16Type,
-    F32Type,
-    Float8E4M3FNType,
-    Float8E5M2Type,
-    FloatAttr,
-    IndexType,
-    IntegerAttr,
-    IntegerType,
-    MemRefType,
-    Operation,
-    Type,
-    TypeAttr,
-    UnitAttr,
-    VectorType,
-)
+from ._ops_imports import *  # noqa: F401,F403
 
 from ._ops_core import (  # noqa: F401
     _materialize_struct_value,
@@ -114,7 +46,6 @@ from ._ops_common import (  # noqa: F401
     _PREDICATE_PART_TOKENS,
     _PREDICATE_STORE_DIST_TOKENS,
     _ROUNDING_TOKENS,
-    _SATURATION_TOKENS,
     _SIGNEDNESS_TOKENS,
     _ST_L2_CACHE_CONTROL_VALUES,
     _ST_L2_CACHE_TOKENS,
@@ -186,7 +117,6 @@ from ._ops_common import (  # noqa: F401
     _same_type_binary,
     _same_type_ternary,
     _same_type_unary,
-    _saturation_attr,
     _simt_enum_attr,
     _st_l2_cache_attr,
     _surface_name_for_op_ctor,
@@ -194,7 +124,6 @@ from ._ops_common import (  # noqa: F401
     _tile_slice_address,
     _tile_slice_linear_offset,
     _tile_slice_ptr,
-    _validate_convert_signedness,
     _validate_integer_signedness_only,
     _validate_raw_fill_l1_fill_word_bits,
     _validate_raw_fill_l1_static_scalar,
@@ -226,6 +155,7 @@ from ._ops_vmem import (  # noqa: F401
     _infer_result_vreg_type_for_element_dtype,
     _infer_vcvt_part_family,
     _infer_vpack_result_type,
+    _infer_vunpack_result_type,
     _normalize_dist_token,
     _normalize_vcvt_part_mode,
     _normalize_vcvt_sat_mode,
@@ -248,6 +178,7 @@ from ._ops_vmem import (  # noqa: F401
     vldus,
     vmulscvt,
     vpack,
+    vunpack,
     vscatter,
     vsldb,
     vsstb,
@@ -300,14 +231,16 @@ from ._ops_vmath import (  # noqa: F401
     _infer_vdup_scalar_result_type,
     _mask_granularity_bits,
     _resolve_l1_bypass_scalar_pointer,
-    _validate_scalar_l1_bypass,
     chistv2,
-    load_scalar,
-    store_scalar,
+    dhistv2,
+    ld_dev,
+    st_dev,
     vabs,
     vadd,
     vaddc,
     vaddcs,
+    vsubc,
+    vsubcs,
     vaddrelu,
     vadds,
     vand,
@@ -357,6 +290,7 @@ from ._ops_vmath import (  # noqa: F401
     vshrs,
     vsqrt,
     vsqz,
+    vusqz,
     vsub,
     vsubrelu,
     vsubs,
@@ -586,6 +520,11 @@ from ._ops_mte import (  # noqa: F401
     set_atomic_s32,
     set_atomic_s8,
     set_store_atomic_cfg,
+    get_ctrl,
+    set_ctrl,
+    set_mov_pad_val,
+    set_loop_size_ubtoout,
+    set_loop_size_outtoub,
 )
 from ._ops_simt import (  # noqa: F401
     _atomic_binary,
@@ -606,13 +545,10 @@ from ._ops_simt import (  # noqa: F401
     atomic_sub,
     atomic_xor,
     ceil,
-    convert,
     cos,
     exp,
     floor,
     fma,
-    fmax,
-    fmin,
     get_block_dim,
     get_block_dim_x,
     get_block_dim_y,
@@ -668,6 +604,7 @@ from ._ops_simt import (  # noqa: F401
     shuffle_up,
     simt_launch,
     sin,
+    syncall,
     sqrt,
     stg,
     store_vfsimt_info,
@@ -695,7 +632,7 @@ __all__ = [
     "pge_b8", "pge_b16", "pge_b32",
     "make_mask",
     "pand", "por", "pxor", "pnot", "psel",
-    "pbitcast", "vcvt", "vpack", "vmulscvt", "ppack", "punpack",
+    "pbitcast", "vcvt", "vpack", "vunpack", "vmulscvt", "ppack", "punpack",
     "pintlv_b8", "pintlv_b16", "pintlv_b32",
     "pdintlv_b8", "pdintlv_b16", "pdintlv_b32",
     "vintlv", "vdintlv",
@@ -705,9 +642,10 @@ __all__ = [
     "vbitcast",
     "vbr",
     "vadd", "vsub", "vmul", "vdiv", "vmax", "vmin",
+    "vaddc", "vaddcs", "vsubc", "vsubcs",
     "vand", "vor", "vxor", "vshl", "vshr",
     "vcmax", "vcadd", "vcmin", "vdup", "vexpdif",
-    "vexp", "vln", "vsqrt", "vabs", "vneg", "vrec", "vrsqrt", "vrelu", "vnot",
+    "vexp", "vln", "vsqrt", "vabs", "vneg", "vrec", "vrsqrt", "vrelu", "vnot", "vsqz", "vusqz",
     "vcgmax", "vcgadd", "vcgmin", "vcpadd",
     "vadds", "vsubs", "vmuls", "vmaxs", "vmins", "vlrelu", "vshrs", "vshls", "vands", "vors", "vxors",
     "vaxpy", "vmula", "vci", "vaddrelu", "vsubrelu",
@@ -736,11 +674,13 @@ __all__ = [
     "tpartadd", "tpartmul", "tpartmax", "tpartmin",
     "tfillpad",
     "ttri", "tthistogram",
-    "chistv2",
+    "chistv2", "dhistv2",
     "as_ptr",
     "mte_load", "mte_store", "mte_gm_ub", "mte_ub_gm", "mte_ub_ub", "mte_ub_l1",
     "mte_gm_l1", "raw_fill_l1", "mte_l1_ub", "mte_gm_l1_frac", "mte_l1_bt", "mte_l1_fb", "mem_bar",
     "set_store_atomic_cfg",
+    "get_ctrl", "set_ctrl", "set_mov_pad_val",
+    "set_loop_size_ubtoout", "set_loop_size_outtoub",
     "set_atomic_add", "set_atomic_max", "set_atomic_min", "set_atomic_none",
     "set_atomic_f32", "set_atomic_f16", "set_atomic_bf16",
     "set_atomic_s32", "set_atomic_s16", "set_atomic_s8",
@@ -764,10 +704,10 @@ __all__ = [
     "atomic_and", "atomic_or", "atomic_xor", "atomic_cas",
     "prmt", "mulhi", "mul_i32toi64",
     "absf", "sqrt", "exp", "log", "sin", "cos", "pow", "ceil", "floor", "rint", "round",
-    "fmin", "fmax", "fma", "convert",
+    "fma",
     "syncthreads", "threadfence", "threadfence_block", "trap", "keep", "resume",
     "pipe_barrier", "get_buf", "rls_buf",
-    "set_cross_block", "wait_cross_block", "set_intra_block", "wait_intra_block",
+    "set_cross_block", "wait_cross_block", "set_intra_block", "wait_intra_block", "syncall",
     "set_flag", "wait_flag",
     "reserve_buffer", "import_reserved_buffer",
 ]

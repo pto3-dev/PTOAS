@@ -1,3 +1,4 @@
+# coding=utf-8
 # Copyright (c) 2026 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
@@ -5,6 +6,7 @@
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
+
 """PTODSL TileLib templates for A5 ``pto.tcvt`` 1D/2D paths.
 
 Conversion-specific instruction sequences stay in this module. Flattened
@@ -1819,6 +1821,13 @@ template_tcvt_bf16_to_fp4_1d = _register_tcvt_1d(
 )
 
 
+def _strip_suffix(name, suffix):
+    """Python 3.8-safe replacement for str.removesuffix (added in 3.9)."""
+    if suffix and name.endswith(suffix):
+        return name[: -len(suffix)]
+    return name
+
+
 def _register_deferred_tcvt_1d():
     """Assign stable 1D IDs after every 2D fallback is registered."""
 
@@ -1835,7 +1844,7 @@ def _register_deferred_tcvt_1d():
     for candidate in sorted(
         _PENDING_TCVT_1D,
         key=lambda item: fallbacks[
-            item.name.removesuffix("_1d")
+            _strip_suffix(item.name, "_1d")
         ].metadata.id,
     ):
         assigned = replace(
