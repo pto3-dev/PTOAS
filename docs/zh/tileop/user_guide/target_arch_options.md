@@ -8,7 +8,7 @@
 
 ## 相关参数
 
-- `--pto-arch=a3|a5`
+- `--pto-arch=a1|a3|a5`
 
 该选项默认值为 `a3`；未显式指定时，`ptoas` 按 `a3` 编译。
 
@@ -63,3 +63,21 @@ A1 耦合核 dispatch 最多使用 8 个 block。DMA 可使用由 `pto.get_block
 平坦 ABI 参数生成的未使用视图 (unused tensor view) 不产生 DMA，可在存在
 二维别名视图时保留。所有被消费的视图仍执行原有维度、布局、对齐和边界检查；
 此支持不允许一维 DMA。
+
+### A1 多 K GEMM
+
+A1 允许公共 FP16 `M x K` Left、`K x 16` Right 和 FP32 `M x 16` Acc，M/K 为
+[16, 2048] 内的静态 16 对齐维度，有效形状必须完整。Mat 可以使用 ZZ 或 NZ，
+多 K Left 必须使用 ZZ；既有 NZ Left 仅在 K=16 时有效。Right 为 ZN，Acc 为 NZ。
+分配及地址均按实际 `M*K*sizeof(dtype)` 验证对应 L1/L0 存储预算，避免沿用
+旧 N16 输入的固定列数低估缓冲区。N>16、部分有效 tile 及无法证明安全的 DMA
+仍被拒绝。
+
+此路径需要支持多 K 的 A1 PTO-ISA `TLOAD`、`TMOV`、`TMATMUL` 和
+`TMATMUL_ACC` 实现；仅升级编译器无法让旧 ISA 头文件接受宽 K。
+硬件 im2col 的 ConvTile 编译和 PyPTO 前端接入仍需独立支持。
+
+原生组合回归位于 `test/npu_validation/scripts/test_a1_multi_k_gemm.py`。
+设置 `PTO_ISA_ROOT` 指向上述 ISA 实现后，使用 `python -m pytest` 和 `-n 1`
+运行该文件。CPU 检查同时启用 cube/vector 代码段，随后在 310P 耦合核上验证同一
+生成代码；无设备或缺少对应 ISA 路径时跳过。
