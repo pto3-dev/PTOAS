@@ -294,9 +294,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TDivOp, TExpOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp,
-                TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp,
-                BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
+                TDivOp, TExpOp, TMaxOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp,
+                TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp,
+                SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
             if (failed(validateType(op, type)))
@@ -342,7 +342,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr{};
             return space ? std::optional<AddressSpace>(space.getAddressSpace()) : std::nullopt;
         };
-        if (isa<TAddOp, TSubOp, TMulOp, TDivOp, TExpOp>(op))
+        if (isa<TAddOp, TSubOp, TMulOp, TDivOp, TExpOp, TMaxOp>(op))
             for (Value operand : op->getOperands())
                 if (locationOf(operand) != AddressSpace::VEC ||
                     cast<TileBufType>(operand.getType()).getBLayoutValueI32() != 0)
@@ -411,9 +411,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (auto insert = dyn_cast<TInsertOp>(op)) {
             auto source = cast<TileBufType>(insert.getSrc().getType());
             auto destination = cast<TileBufType>(insert.getDst().getType());
-            if (locationOf(insert.getSrc()) != AddressSpace::MAT ||
-                locationOf(insert.getDst()) != AddressSpace::LEFT || source.getShape()[1] != 16 ||
-                !source.getElementType().isF16() || !destination.getElementType().isF16())
+            if (locationOf(insert.getSrc()) != AddressSpace::MAT || locationOf(insert.getDst()) != AddressSpace::LEFT ||
+                source.getShape()[1] != 16 || !source.getElementType().isF16() || !destination.getElementType().isF16())
                 return reject("A1 insertion requires a full FP16 C16 Mat panel and Left destination.");
             const auto row = offsetFacts(insert.getIndexRow());
             const auto column = offsetFacts(insert.getIndexCol());
