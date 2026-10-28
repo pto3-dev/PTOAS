@@ -57,3 +57,9 @@ ptoas input.pto --pto-arch=a5 -o output.cpp
 A1 耦合核 dispatch 最多使用 8 个 block。DMA 可使用由 `pto.get_block_idx`、
 正步长静态上界循环及整数算术推导的动态偏移；验证器必须证明非负、32 字节
 对齐以及完整 tile 位于源视图内。未知参数、无法证明的上界和算术溢出仍被拒绝。
+
+### A1 未使用的张量视图
+
+平坦 ABI 参数生成的未使用视图 (unused tensor view) 不产生 DMA，可在存在
+二维别名视图时保留。所有被消费的视图仍执行原有维度、布局、对齐和边界检查；
+此支持不允许一维 DMA。
