@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_fp16_max(%out: !pto.ptr<f16>, %lhs: !pto.ptr<f16>, %rhs: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 16 : index
+    %cols = arith.constant 16 : index
+    %lhs_view = pto.make_tensor_view %lhs, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %rhs_view = pto.make_tensor_view %rhs, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %out_view = pto.make_tensor_view %out, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %lhs_part = pto.partition_view %lhs_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %rhs_part = pto.partition_view %rhs_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 16x16xf16>
+    %b = pto.alloc_tile : !pto.tile_buf<vec, 16x16xf16>
+    %c = pto.alloc_tile : !pto.tile_buf<vec, 16x16xf16>
+    pto.tload ins(%lhs_part : !pto.partition_tensor_view<16x16xf16>) outs(%a : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%rhs_part : !pto.partition_tensor_view<16x16xf16>) outs(%b : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tmax ins(%a, %b : !pto.tile_buf<vec, 16x16xf16>, !pto.tile_buf<vec, 16x16xf16>) outs(%c : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tstore ins(%c : !pto.tile_buf<vec, 16x16xf16>) outs(%out_part : !pto.partition_tensor_view<16x16xf16>)
+    return
+  }
+}
+
+// CHECK: a1_fp16_max(
+// CHECK: Tile<TileType::Vec, half, 16, 16,
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TMAX(
+// CHECK: TSTORE(
