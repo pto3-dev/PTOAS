@@ -34,10 +34,17 @@ def require_a1():
 
 
 @pytest.mark.parametrize(
-    "rows,zz,ub_input",
-    [(32, False, False), (224, True, False), (32, False, True), (224, True, True)],
+    "rows,zz,ub_input,insert",
+    [
+        (32, False, False, False),
+        (224, True, False, False),
+        (32, False, True, False),
+        (224, True, True, False),
+        (32, False, False, True),
+        (112, False, False, True),
+    ],
 )
-def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz, ub_input):
+def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz, ub_input, insert):
     root = Path(__file__).resolve().parents[3]
     isa = os.environ.get("PTO_ISA_ROOT")
     if not isa or not (Path(isa) / "include/pto/npu/a1/TMatrix.hpp").is_file():
@@ -50,9 +57,15 @@ def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz, ub_input):
     )
     if compiler is None:
         pytest.skip("CPU-first oracle requires Clang19 or GCC>=14")
-    name = "vec_to_mat_gemm.pto" if ub_input else "multi_k_gemm.pto"
+    name = (
+        "left_panel_insert.pto"
+        if insert
+        else ("vec_to_mat_gemm.pto" if ub_input else "multi_k_gemm.pto")
+    )
     source = (root / "test/lit/a1" / name).read_text()
     source = source.replace("a1_vec_to_mat_gemm", "a1_multi_k_gemm")
+    source = source.replace("a1_left_panel_insert", "a1_multi_k_gemm")
+    reduction, input_k = (64, 16) if insert else (144, 144)
     factor = 4 if ub_input else 2
     source = source.replace(
         "arith.constant 32 : index", f"arith.constant {rows} : index"
@@ -78,6 +91,9 @@ def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz, ub_input):
     if ub_input:
         assert "set_flag(PIPE_V, PIPE_MTE3," in generated
         assert "set_flag(PIPE_MTE3, PIPE_MTE1," in generated
+    if insert:
+        assert "TINSERT(" in generated
+        assert "set_flag(PIPE_MTE2, PIPE_MTE1," in generated
     cpu_main = r"""
 #include <vector>
 int main() {
@@ -95,6 +111,11 @@ int main() {
     return 0;
 }
 """.replace("M", str(rows)).replace("2*expected", f"{factor}*expected")
+    if insert:
+        cpu_main = cpu_main.replace("*144", "*16").replace("144*16", "64*16")
+        cpu_main = cpu_main.replace("k<144", "k<64").replace(
+            "a[row*16+k]", "a[row*16+k%16]"
+        )
     cpu = tmp_path / "cpu.cpp"
     cpu.write_text("#include <cstdint>\n" + generated + cpu_main)
     executable = tmp_path / "cpu-gemm"
@@ -140,10 +161,10 @@ extern "C" __global__ AICORE void NativeCompilerGemm(__gm__ int64_t* args) {
         for seed in (907, 911):
             generator = torch.Generator().manual_seed(seed)
             a = (
-                torch.randint(-8, 9, (rows, 144), generator=generator).float() / 16
+                torch.randint(-8, 9, (rows, input_k), generator=generator).float() / 16
             ).half()
             b = (
-                torch.randint(-8, 9, (144, 16), generator=generator).float() / 16
+                torch.randint(-8, 9, (reduction, 16), generator=generator).float() / 16
             ).half()
             ga = torch.full((a.numel() + 32,), 7, dtype=torch.float16)
             ga[16:-16] = a.flatten()
@@ -152,7 +173,8 @@ extern "C" __global__ AICORE void NativeCompilerGemm(__gm__ int64_t* args) {
             output = torch.full((rows * 16 + 32,), 7, dtype=torch.float32)
             runner(ga, gb, output)
             assert torch.equal(
-                output[16:-16].reshape(rows, 16), factor * (a.float() @ b.float())
+                output[16:-16].reshape(rows, 16),
+                factor * ((a.repeat(1, 4) if insert else a).float() @ b.float()),
             )
             assert torch.all(output[:16] == 7) and torch.all(output[-16:] == 7)
             assert torch.equal(ga[16:-16], a.flatten()) and torch.equal(

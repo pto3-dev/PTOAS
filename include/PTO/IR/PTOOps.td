@@ -4696,55 +4696,11 @@ def TInsertOp : PTO_TOp<"tinsert", [
 
   let extraClassDeclaration = [{
     // TINSERT runs on different pipes depending on target/path:
+    // - A1 Mat(L1)->Left(L0A): PIPE_MTE1.
     // - Vec(UB)->Vec(UB): PIPE_V.
     // - A5 Vec(UB)->Mat(L1): PIPE_MTE3 (custom UB->L1 copy path).
     // - Acc->Mat / Acc->Vec (A2/A3/A5 regular path): PIPE_FIX.
-    ::mlir::pto::PIPE getPipe() {
-      auto isA5Target = [&]() -> bool {
-        auto moduleOp = getOperation()->getParentOfType<::mlir::ModuleOp>();
-        if (!moduleOp)
-          return false;
-
-        if (auto arch =
-                moduleOp->getAttrOfType<::mlir::StringAttr>("pto.target_arch")) {
-          if (arch.getValue().equals_insensitive("a5"))
-            return true;
-        }
-
-        if (auto spec =
-                moduleOp->getAttrOfType<::mlir::StringAttr>("pto.device-spec")) {
-          auto s = spec.getValue();
-          if (s.starts_with("Ascend950") || s.starts_with("Ascend910_95"))
-            return true;
-        }
-        return false;
-      };
-
-      auto getASFromType = [](Type ty)
-          -> std::optional<::mlir::pto::AddressSpace> {
-        if (auto tb = ::mlir::dyn_cast<::mlir::pto::TileBufType>(ty)) {
-          if (auto as = ::mlir::dyn_cast_or_null<::mlir::pto::AddressSpaceAttr>(
-                  tb.getMemorySpace()))
-            return as.getAddressSpace();
-          return std::nullopt;
-        }
-        return std::nullopt;
-      };
-
-      auto sOpt = getASFromType(getSrc().getType());
-      auto dOpt = getASFromType(getDst().getType());
-      if (sOpt.has_value() && dOpt.has_value() &&
-          sOpt.value() == ::mlir::pto::AddressSpace::VEC &&
-          dOpt.value() == ::mlir::pto::AddressSpace::VEC)
-        return ::mlir::pto::PIPE::PIPE_V;
-      if (isA5Target() && sOpt.has_value() && dOpt.has_value() &&
-          sOpt.value() == ::mlir::pto::AddressSpace::VEC &&
-          dOpt.value() == ::mlir::pto::AddressSpace::MAT)
-        return ::mlir::pto::PIPE::PIPE_MTE3;
-
-      // Default and Acc->Mat path.
-      return ::mlir::pto::PIPE::PIPE_FIX;
-    }
+    ::mlir::pto::PIPE getPipe();
     ::mlir::MutableOperandRange getDpsInitsMutable() { return getDstMutable(); }
   }];
 }

@@ -295,7 +295,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
                 TDivOp, TExpOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp,
-                TMovOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp,
+                TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp, SetFlagOp, WaitFlagOp,
                 BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
@@ -408,6 +408,25 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (auto exponential = dyn_cast<TExpOp>(op))
             if (exponential.getPrecisionType() != ExpPrecision::Default)
                 return reject("A1 exponential supports default precision only.");
+        if (auto insert = dyn_cast<TInsertOp>(op)) {
+            auto source = cast<TileBufType>(insert.getSrc().getType());
+            auto destination = cast<TileBufType>(insert.getDst().getType());
+            if (locationOf(insert.getSrc()) != AddressSpace::MAT ||
+                locationOf(insert.getDst()) != AddressSpace::LEFT || source.getShape()[1] != 16 ||
+                !source.getElementType().isF16() || !destination.getElementType().isF16())
+                return reject("A1 insertion requires a full FP16 C16 Mat panel and Left destination.");
+            const auto row = offsetFacts(insert.getIndexRow());
+            const auto column = offsetFacts(insert.getIndexCol());
+            // Prove complete-panel bounds and C16 alignment before emitting DMA.
+            // The ISA retains a release-build guard for direct native callers.
+            if (row.lower < 0 || column.lower < 0 || row.multiple % 16 || column.multiple % 16 ||
+                row.upper > destination.getShape()[0] - source.getShape()[0] ||
+                column.upper > destination.getShape()[1] - 16)
+                return reject("A1 insertion requires bounded aligned offsets within its complete Left tile.");
+            if (insert.getFp() || insert.getPreQuantScalar() || insert.getAccToVecModeAttr() ||
+                insert.getTinsertModeAttr() || insert.getReluPreMode() != ReluPreMode::NoRelu)
+                return reject("A1 panel insertion does not support auxiliary operands or fused modes.");
+        }
         if (auto move = dyn_cast<TMovOp>(op)) {
             const auto src = locationOf(move.getSrc());
             const auto dst = locationOf(move.getDst());

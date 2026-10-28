@@ -8,6 +8,71 @@
 
 // Included by PTO.cpp as part of the PTO IR implementation translation unit.
 
+// A1 has a coupled-core MTE1 panel copy, distinct from FIXPIPE inserts.
+static LogicalResult verifyTInsertA1(TInsertOp op) {
+  auto common = verifyTInsertCommon(op, /*allowLowPrecision=*/false);
+  if (failed(common)) return failure();
+  const TInsertCommon &c = *common;
+  if (!c.srcSpace || !c.dstSpace || *c.srcSpace != pto::AddressSpace::MAT ||
+      *c.dstSpace != pto::AddressSpace::LEFT || !c.srcElem.isF16() || !c.dstElem.isF16())
+    return op.emitOpError("A1 insertion requires FP16 Mat-to-Left operands");
+  if (op.getFp() || op.getPreQuantScalar() || op.getAccToVecModeAttr() || op.getTinsertModeAttr() ||
+      op.getReluPreMode() != pto::ReluPreMode::NoRelu)
+    return op.emitOpError("A1 panel insertion does not support auxiliary operands or fused modes");
+  return success();
+}
+
+::mlir::pto::PIPE mlir::pto::TInsertOp::getPipe() {
+  auto isA5Target = [&]() -> bool {
+    auto moduleOp = getOperation()->getParentOfType<::mlir::ModuleOp>();
+    if (!moduleOp)
+      return false;
+
+    if (auto arch =
+            moduleOp->getAttrOfType<::mlir::StringAttr>("pto.target_arch")) {
+      if (arch.getValue().equals_insensitive("a5"))
+        return true;
+    }
+
+    if (auto spec =
+            moduleOp->getAttrOfType<::mlir::StringAttr>("pto.device-spec")) {
+      auto s = spec.getValue();
+      if (s.starts_with("Ascend950") || s.starts_with("Ascend910_95"))
+        return true;
+    }
+    return false;
+  };
+
+  auto getASFromType = [](Type ty)
+      -> std::optional<::mlir::pto::AddressSpace> {
+    if (auto tb = ::mlir::dyn_cast<::mlir::pto::TileBufType>(ty)) {
+      if (auto as = ::mlir::dyn_cast_or_null<::mlir::pto::AddressSpaceAttr>(
+              tb.getMemorySpace()))
+        return as.getAddressSpace();
+      return std::nullopt;
+    }
+    return std::nullopt;
+  };
+
+  auto sOpt = getASFromType(getSrc().getType());
+  auto dOpt = getASFromType(getDst().getType());
+  if (::mlir::pto::isTargetArchA1(getOperation()) && sOpt && dOpt &&
+      *sOpt == ::mlir::pto::AddressSpace::MAT && *dOpt == ::mlir::pto::AddressSpace::LEFT)
+    return ::mlir::pto::PIPE::PIPE_MTE1;
+  if (sOpt.has_value() && dOpt.has_value() &&
+      sOpt.value() == ::mlir::pto::AddressSpace::VEC &&
+      dOpt.value() == ::mlir::pto::AddressSpace::VEC)
+    return ::mlir::pto::PIPE::PIPE_V;
+  if (isA5Target() && sOpt.has_value() && dOpt.has_value() &&
+      sOpt.value() == ::mlir::pto::AddressSpace::VEC &&
+      dOpt.value() == ::mlir::pto::AddressSpace::MAT)
+    return ::mlir::pto::PIPE::PIPE_MTE3;
+
+  // Default and Acc->Mat path.
+  return ::mlir::pto::PIPE::PIPE_FIX;
+
+}
+
 static LogicalResult verifyTInsertA5(TInsertOp op) {
   auto common = verifyTInsertCommon(op, /*allowLowPrecision=*/true);
   if (failed(common)) {
@@ -33,6 +98,7 @@ static LogicalResult verifyTInsertA5(TInsertOp op) {
 }
 
 mlir::LogicalResult mlir::pto::TInsertOp::verify() {
+  if (isTargetArchA1(getOperation())) return verifyTInsertA1(*this);
   auto verifyA2A3 = [this]() -> LogicalResult { return verifyTInsertA2A3(*this); };
   auto verifyA5 = [this]() -> LogicalResult { return verifyTInsertA5(*this); };
   return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);
