@@ -33,8 +33,11 @@ def require_a1():
         pytest.skip("Requires Ascend310P hardware")
 
 
-@pytest.mark.parametrize("rows,zz", [(32, False), (224, True)])
-def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz):
+@pytest.mark.parametrize(
+    "rows,zz,ub_input",
+    [(32, False, False), (224, True, False), (32, False, True), (224, True, True)],
+)
+def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz, ub_input):
     root = Path(__file__).resolve().parents[3]
     isa = os.environ.get("PTO_ISA_ROOT")
     if not isa or not (Path(isa) / "include/pto/npu/a1/TMatrix.hpp").is_file():
@@ -47,7 +50,10 @@ def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz):
     )
     if compiler is None:
         pytest.skip("CPU-first oracle requires Clang19 or GCC>=14")
-    source = (root / "test/lit/a1/multi_k_gemm.pto").read_text()
+    name = "vec_to_mat_gemm.pto" if ub_input else "multi_k_gemm.pto"
+    source = (root / "test/lit/a1" / name).read_text()
+    source = source.replace("a1_vec_to_mat_gemm", "a1_multi_k_gemm")
+    factor = 4 if ub_input else 2
     source = source.replace(
         "arith.constant 32 : index", f"arith.constant {rows} : index"
     )
@@ -69,6 +75,9 @@ def test_a1_multi_k_emitted_cpp(tmp_path, rows, zz):
     generated = output_cpp.read_text()
     assert "TileType::Left, half," in generated and "TMATMUL_ACC(" in generated
     assert "PIPE_FIX" not in generated
+    if ub_input:
+        assert "set_flag(PIPE_V, PIPE_MTE3," in generated
+        assert "set_flag(PIPE_MTE3, PIPE_MTE1," in generated
     cpu_main = r"""
 #include <vector>
 int main() {
@@ -85,7 +94,7 @@ int main() {
     for(int i=0;i<16;++i) if(output[i]!=7 || output[16+M*16+i]!=7) return 2;
     return 0;
 }
-""".replace("M", str(rows))
+""".replace("M", str(rows)).replace("2*expected", f"{factor}*expected")
     cpu = tmp_path / "cpu.cpp"
     cpu.write_text("#include <cstdint>\n" + generated + cpu_main)
     executable = tmp_path / "cpu-gemm"
@@ -143,7 +152,7 @@ extern "C" __global__ AICORE void NativeCompilerGemm(__gm__ int64_t* args) {
             output = torch.full((rows * 16 + 32,), 7, dtype=torch.float32)
             runner(ga, gb, output)
             assert torch.equal(
-                output[16:-16].reshape(rows, 16), 2 * (a.float() @ b.float())
+                output[16:-16].reshape(rows, 16), factor * (a.float() @ b.float())
             )
             assert torch.all(output[:16] == 7) and torch.all(output[-16:] == 7)
             assert torch.equal(ga[16:-16], a.flatten()) and torch.equal(

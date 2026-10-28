@@ -81,3 +81,12 @@ A1 允许公共 FP16 `M x K` Left、`K x 16` Right 和 FP32 `M x 16` Acc，M/K �
 设置 `PTO_ISA_ROOT` 指向上述 ISA 实现后，使用 `python -m pytest` 和 `-n 1`
 运行该文件。CPU 检查同时启用 cube/vector 代码段，随后在 310P 耦合核上验证同一
 生成代码；无设备或缺少对应 ISA 路径时跳过。
+
+### A1 UB 到 L1 搬运
+
+A1 `pto.tmov` 支持完整静态 FP16 Vec 到同形状 ZZ/NZ Mat 的搬运。Vec 必须为连续
+行主序，M/K 均按 16 对齐；原有 UB/L1 容量检查保持生效。生成代码通过 MTE3
+将 ND 行重排为 C16 面板，不经 GM 中转，也不执行标量 UB 读取。自动同步跟踪
+V/MTE2 到 MTE3 的生产依赖、MTE3 到 MTE1 的消费依赖及缓冲区复用依赖。
+此路径需要配套支持 Vec-to-Mat 的 A1 PTO-ISA。FP32 源、部分有效形状和累加器
+专用模式不属于该搬运配置，A3 的地址空间支持范围保持不变。

@@ -414,7 +414,15 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (move.getFp() || move.getPreQuantScalar() || move.getGrpAxisAttr() || move.getNumResults() ||
                 move.getReluPreMode() != ReluPreMode::NoRelu)
                 return reject("A1 matrix moves do not support auxiliary operands, results or fused modes.");
-            if (src == AddressSpace::MAT && (dst == AddressSpace::LEFT || dst == AddressSpace::RIGHT)) {
+            if (src == AddressSpace::VEC && dst == AddressSpace::MAT) {
+                auto source = cast<TileBufType>(move.getSrc().getType());
+                auto destination = cast<TileBufType>(move.getDst().getType());
+                // Mat validation enforces C16 alignment/boxing and L1 capacity;
+                // Vec validation enforces full contiguous rows and UB capacity.
+                if (!source.getElementType().isF16() || !destination.getElementType().isF16() ||
+                    source.getShape() != destination.getShape() || move.getAccToVecModeAttr())
+                    return reject("A1 Vec-to-Mat moves require matching full FP16 tiles without accumulator modes.");
+            } else if (src == AddressSpace::MAT && (dst == AddressSpace::LEFT || dst == AddressSpace::RIGHT)) {
                 if (cast<TileBufType>(move.getSrc().getType()).getShape() !=
                     cast<TileBufType>(move.getDst().getType()).getShape())
                     return reject("A1 matrix operand moves require matching full shapes.");
@@ -427,7 +435,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                     move.getAccToVecModeAttr().getValue() != AccToVecMode::SingleModeVec0)
                     return reject("A1 writeback requires matching FP32 ND Nx16 Vec and explicit single_mode_vec0.");
             } else {
-                return reject("A1 matrix moves require Mat-to-Left/Right or Acc-to-Vec.");
+                return reject("A1 matrix moves require Vec-to-Mat, Mat-to-Left/Right or Acc-to-Vec.");
             }
         }
         if (auto matmul = dyn_cast<TMatmulOp>(op)) {

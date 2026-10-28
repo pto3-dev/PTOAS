@@ -194,7 +194,7 @@ static LogicalResult verifyTMovGenericPairing(TMovOp op, bool isA5) {
       {pto::AddressSpace::VEC, pto::AddressSpace::VEC},
       {pto::AddressSpace::ACC, pto::AddressSpace::MAT},
       {pto::AddressSpace::ACC, pto::AddressSpace::VEC}};
-  if (isA5)
+  if (isA5 || pto::isTargetArchA1(op.getOperation()))
     supported.push_back({pto::AddressSpace::VEC, pto::AddressSpace::MAT});
   bool okPair = llvm::is_contained(supported, AddressPair(*srcSpace, *dstSpace));
   const bool isAccToMat = *srcSpace == pto::AddressSpace::ACC &&
@@ -313,6 +313,12 @@ static LogicalResult verifyTMovGenericFpForm(TMovOp op, bool isA5) {
     if (s == ::mlir::pto::AddressSpace::VEC && d == ::mlir::pto::AddressSpace::VEC) {
         return ::mlir::pto::PIPE::PIPE_V;
     }
+
+    // Coupled A1 UB -> L1 copies use MTE3, not the vector fallback.
+    // This lets automatic sync track UB reads and L1 writes/reuse together.
+    if (s == ::mlir::pto::AddressSpace::VEC && d == ::mlir::pto::AddressSpace::MAT &&
+        ::mlir::pto::isTargetArchA1(getOperation()))
+        return ::mlir::pto::PIPE::PIPE_MTE3;
 
     // MAT -> L0A/L0B/Bias moves run on MTE1.
     if ((s == ::mlir::pto::AddressSpace::MAT &&
