@@ -81,8 +81,8 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
     if (isa<arith::AddIOp>(op) && !llvm::AddOverflow(a.lower, b.lower, lower) &&
         !llvm::AddOverflow(a.upper, b.upper, upper))
         return {lower, upper, multiple};
-    if (isa<arith::MulIOp>(op) && a.lower >= 0 && b.lower >= 0 &&
-        !llvm::MulOverflow(a.lower, b.lower, lower) && !llvm::MulOverflow(a.upper, b.upper, upper)) {
+    if (isa<arith::MulIOp>(op) && a.lower >= 0 && b.lower >= 0 && !llvm::MulOverflow(a.lower, b.lower, lower) &&
+        !llvm::MulOverflow(a.upper, b.upper, upper)) {
         uint64_t product;
         const auto aligned = !__builtin_mul_overflow(a.multiple, b.multiple, &product) ? product : 1;
         return {lower, upper, aligned};
@@ -98,9 +98,19 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
     auto space = dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace());
     if (space && space.getAddressSpace() != AddressSpace::VEC) {
         const auto location = space.getAddressSpace();
-        if (shape.size() != 2 || shape[0] < 16 || shape[0] > 2048 || shape[0] % 16 || shape[1] != 16 ||
-            tile.getValidShape() != shape || tile.getCompactModeI32() != 0)
-            return op->emitError("A1 narrow matrix lowering requires full aligned rows in [16, 2048] and 16 columns.");
+        if (shape.size() != 2 || shape[0] < 16 || shape[0] > 2048 || shape[0] % 16 || shape[1] < 16 ||
+            shape[1] > 2048 || shape[1] % 16 || tile.getValidShape() != shape || tile.getCompactModeI32() != 0)
+            return op->emitError("A1 matrix lowering requires full aligned dimensions in [16, 2048].");
+        if (location == AddressSpace::LEFT && tile.getBLayoutValueI32() == static_cast<int32_t>(BLayout::ColMajor) &&
+            shape[1] != 16)
+            return op->emitError(
+                "A1 legacy NZ Left requires full aligned rows in [16, 2048] and 16 columns; use ZZ for multi-K.");
+        if ((location == AddressSpace::RIGHT || location == AddressSpace::ACC) && shape[1] != 16)
+            return op->emitError("A1 multi-K GEMM requires N16 Right and Acc tiles.");
+        const auto spec = getA1MemorySpec(location);
+        const uint64_t bytes = static_cast<uint64_t>(shape[0]) * shape[1] * vectorElementBytes(tile.getElementType());
+        if (bytes > spec.capacityBytes)
+            return op->emitError("A1 matrix tile exceeds its memory budget.");
         const auto row = static_cast<int32_t>(BLayout::RowMajor);
         const auto col = static_cast<int32_t>(BLayout::ColMajor);
         const auto innerRow = static_cast<int32_t>(SLayout::RowMajor);
@@ -111,21 +121,21 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
                         (tile.getBLayoutValueI32() == row || tile.getBLayoutValueI32() == col) &&
                         tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 512;
         if (location == AddressSpace::LEFT)
-            supported = tile.getElementType().isF16() && tile.getBLayoutValueI32() == col &&
+            supported = tile.getElementType().isF16() &&
+                        (tile.getBLayoutValueI32() == row || tile.getBLayoutValueI32() == col) &&
                         tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 512;
         if (location == AddressSpace::RIGHT)
-            supported = shape[0] == 16 && tile.getElementType().isF16() && tile.getBLayoutValueI32() == row &&
+            supported = tile.getElementType().isF16() && tile.getBLayoutValueI32() == row &&
                         tile.getSLayoutValueI32() == innerCol && tile.getSFractalSizeI32() == 512;
         if (location == AddressSpace::ACC)
             supported = tile.getElementType().isF32() && tile.getBLayoutValueI32() == col &&
                         tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 1024;
         if (!supported)
-            return op->emitError("A1 matrix tiles require FP16 ZZ/NZ Mat, NZ Left/ZN Right or FP32 NZ Acc layouts.");
+            return op->emitError(
+                "A1 matrix tiles require FP16 ZZ/NZ Mat, ZZ Left (legacy NZ at K16), ZN Right or FP32 NZ Acc layouts.");
         if (auto alloc = dyn_cast<AllocTileOp>(op)) {
             if (alloc.getAddr()) {
                 auto addr = constantInt(alloc.getAddr());
-                const auto spec = getA1MemorySpec(location);
-                const uint64_t bytes = shape[0] * 16 * vectorElementBytes(tile.getElementType());
                 if (!addr || *addr < 0 || *addr % spec.alignmentBytes ||
                     static_cast<uint64_t>(*addr) > spec.capacityBytes - bytes)
                     return op->emitError(
@@ -214,7 +224,8 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
         return op->emitError("A1 packed column DMA requires a contiguous Mx1 view and aligned row offset.");
     const int64_t viewRows = *constantInt(view.getShape()[0]);
     const int64_t viewCols = *constantInt(view.getShape()[1]);
-    if (*rows > viewRows || *cols > viewCols || rowOffset.upper > viewRows - *rows || colOffset.upper > viewCols - *cols)
+    if (*rows > viewRows || *cols > viewCols || rowOffset.upper > viewRows - *rows ||
+        colOffset.upper > viewCols - *cols)
         return op->emitError("A1 DMA partition must fit within its source tensor view.");
     return success();
 }
@@ -256,8 +267,9 @@ void mlir::pto::normalizeA1StaticValidShapes(ModuleOp module)
             return;
         // Each SSA use observes the refined allocation type. Explicit valid
         // operands are redundant once the same extents live in the type.
-        alloc.getResult().setType(TileBufType::get(
-            type.getContext(), shape, type.getElementType(), type.getMemorySpace(), shape, type.getConfigAttr()));
+        alloc.getResult().setType(
+            TileBufType::get(
+                type.getContext(), shape, type.getElementType(), type.getMemorySpace(), shape, type.getConfigAttr()));
         alloc.getValidRowMutable().clear();
         alloc.getValidColMutable().clear();
     });
