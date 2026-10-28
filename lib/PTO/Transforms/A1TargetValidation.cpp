@@ -159,7 +159,16 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
 
 LogicalResult validateView(MakeTensorViewOp view)
 {
+    // Flat ABI parameters may also have a canonical 2-D alias. The unused
+    // original view issues no memory access; validate the alias at its DMA use.
     auto type = cast<TensorViewType>(view.getResult().getType());
+    if (view.getResult().use_empty() && view.getShape().size() == 1 && view.getStrides().size() == 1 &&
+        (!view.getLayoutAttr() || view.getLayoutAttr().getLayout() == Layout::ND) &&
+        (!type.getLayoutAttr() || type.getLayoutAttr().getLayout() == Layout::ND)) {
+        auto size = constantInt(view.getShape()[0]);
+        if (size && *size > 0 && constantInt(view.getStrides()[0]) == 1)
+            return success();
+    }
     if (view.getShape().size() != 2 || view.getStrides().size() != 2)
         return view.emitError("A1 vector lowering requires two-dimensional tensor views.");
     auto rows = constantInt(view.getShape()[0]);
