@@ -8,6 +8,11 @@
 
 #include "PTO/Support/A1Target.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/Support/MathExtras.h"
+#include <algorithm>
+#include <numeric>
+#include <limits>
 #include "mlir/IR/Matchers.h"
 
 using namespace mlir;
@@ -22,6 +27,67 @@ std::optional<int64_t> constantInt(Value value)
     if (!matchPattern(value, m_ConstantInt(&integer)))
         return std::nullopt;
     return integer.getSExtValue();
+}
+
+// Dynamic DMA remains fail-closed: prove a finite interval and its alignment
+// before accepting an offset. A1 dispatch has at most eight coupled blocks;
+// unknown scalars never acquire that contract merely from their argument name.
+struct OffsetFacts {
+    int64_t lower = std::numeric_limits<int64_t>::min();
+    int64_t upper = std::numeric_limits<int64_t>::max();
+    uint64_t multiple = 1;
+};
+
+OffsetFacts offsetFacts(Value value, unsigned depth = 0)
+{
+    if (!value || depth > 32)
+        return {};
+    if (auto constant = constantInt(value))
+        return {*constant, *constant, APInt(64, *constant).abs().getZExtValue()};
+    if (value.getDefiningOp<GetBlockIdxOp>())
+        return {0, 7, 1};
+    if (value.getDefiningOp<GetBlockNumOp>())
+        return {1, 8, 1};
+    if (auto cast = value.getDefiningOp<arith::IndexCastOp>()) {
+        auto facts = offsetFacts(cast.getIn(), depth + 1);
+        // Widening i32 to index preserves the bounded hardware identity.
+        // Narrowing a general value is intentionally outside this profile.
+        if (cast.getOut().getType().isIndex() && cast.getIn().getType().isInteger(64))
+            return facts;
+        return {};
+    }
+    if (auto argument = dyn_cast<BlockArgument>(value)) {
+        auto loop = dyn_cast_or_null<scf::ForOp>(argument.getOwner()->getParentOp());
+        if (loop && loop.getInductionVar() == value) {
+            auto lower = offsetFacts(loop.getLowerBound(), depth + 1);
+            auto upper = offsetFacts(loop.getUpperBound(), depth + 1);
+            auto step = offsetFacts(loop.getStep(), depth + 1);
+            if (step.lower > 0 && upper.upper > std::numeric_limits<int64_t>::min())
+                return {lower.lower, upper.upper - 1, std::gcd(lower.multiple, step.multiple)};
+        }
+        return {};
+    }
+    auto* op = value.getDefiningOp();
+    if (!op || op->getNumOperands() != 2)
+        return {};
+    auto a = offsetFacts(op->getOperand(0), depth + 1);
+    auto b = offsetFacts(op->getOperand(1), depth + 1);
+    const auto multiple = std::gcd(a.multiple, b.multiple);
+    if (isa<arith::MaxSIOp>(op))
+        return {std::max(a.lower, b.lower), std::max(a.upper, b.upper), multiple};
+    if (isa<arith::MinSIOp>(op))
+        return {std::min(a.lower, b.lower), std::min(a.upper, b.upper), multiple};
+    int64_t lower, upper;
+    if (isa<arith::AddIOp>(op) && !llvm::AddOverflow(a.lower, b.lower, lower) &&
+        !llvm::AddOverflow(a.upper, b.upper, upper))
+        return {lower, upper, multiple};
+    if (isa<arith::MulIOp>(op) && a.lower >= 0 && b.lower >= 0 &&
+        !llvm::MulOverflow(a.lower, b.lower, lower) && !llvm::MulOverflow(a.upper, b.upper, upper)) {
+        uint64_t product;
+        const auto aligned = !__builtin_mul_overflow(a.multiple, b.multiple, &product) ? product : 1;
+        return {lower, upper, aligned};
+    }
+    return {};
 }
 
 unsigned vectorElementBytes(Type element) { return element.isF16() ? 2 : 4; }
@@ -125,21 +191,21 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
     auto cols = constantInt(partition.getSizes()[1]);
     if (partition.getOffsets().size() != 2)
         return op->emitError("A1 DMA requires two partition offsets.");
-    const int64_t rowOffset = constantInt(partition.getOffsets()[0]).value_or(-1);
-    const int64_t colOffset = constantInt(partition.getOffsets()[1]).value_or(-1);
+    const auto rowOffset = offsetFacts(partition.getOffsets()[0]);
+    const auto colOffset = offsetFacts(partition.getOffsets()[1]);
     auto view = partition.getSource().getDefiningOp<MakeTensorViewOp>();
-    if (!rows || !cols || *rows != tile.getShape()[0] || *cols != tile.getShape()[1] || !view || rowOffset < 0 ||
-        colOffset < 0 || colOffset % (32 / vectorElementBytes(tile.getElementType())))
+    if (!rows || !cols || *rows != tile.getShape()[0] || *cols != tile.getShape()[1] || !view || rowOffset.lower < 0 ||
+        colOffset.lower < 0 || colOffset.multiple % (32 / vectorElementBytes(tile.getElementType())))
         return op->emitError("A1 DMA requires matching static tile sizes and nonnegative aligned partition offsets.");
     if (failed(validateView(view)))
         return failure();
     const bool packedTile = tile.getShape()[1] == 1 && tile.getBLayoutValueI32() == 1;
     if (packedTile && (constantInt(view.getShape()[1]) != 1 || constantInt(view.getStrides()[0]) != 1 ||
-                       rowOffset % (32 / vectorElementBytes(tile.getElementType()))))
+                       rowOffset.multiple % (32 / vectorElementBytes(tile.getElementType()))))
         return op->emitError("A1 packed column DMA requires a contiguous Mx1 view and aligned row offset.");
     const int64_t viewRows = *constantInt(view.getShape()[0]);
     const int64_t viewCols = *constantInt(view.getShape()[1]);
-    if (*rows > viewRows || *cols > viewCols || rowOffset > viewRows - *rows || colOffset > viewCols - *cols)
+    if (*rows > viewRows || *cols > viewCols || rowOffset.upper > viewRows - *rows || colOffset.upper > viewCols - *cols)
         return op->emitError("A1 DMA partition must fit within its source tensor view.");
     return success();
 }
