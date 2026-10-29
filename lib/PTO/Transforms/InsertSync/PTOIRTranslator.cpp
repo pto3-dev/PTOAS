@@ -537,9 +537,15 @@ LogicalResult PTOIRTranslator::UpdateAllocTileOpMemInfo(pto::AllocTileOp op) {
   }
 
   // 3. 注册 Buffer 信息
+  // An explicit runtime local address may overlap any other allocation in
+  // the same address space. Treat it as unknown-range until its provenance
+  // or physical range can be proven, rather than assuming distinct roots
+  // are disjoint and dropping cross-pipeline dependencies.
+  const bool dynamicLocalAddress =
+      op.getAddr() && !knownPhysicalAddress.has_value() && isLocalAddressSpace(space);
   auto newMemInfo = std::make_unique<BaseMemInfo>(
       res, res, space, SmallVector<uint64_t>{baseAddr}, sizeInBytes,
-      knownPhysicalAddress.has_value() && isLocalAddressSpace(space));
+      knownPhysicalAddress.has_value() && isLocalAddressSpace(space), dynamicLocalAddress);
 
   buffer2MemInfoMap_[res].emplace_back(newMemInfo->clone());
   return success();
