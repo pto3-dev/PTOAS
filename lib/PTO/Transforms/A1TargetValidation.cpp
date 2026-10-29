@@ -635,7 +635,14 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (move.getFp() || move.getPreQuantScalar() || move.getGrpAxisAttr() || move.getNumResults() ||
                 move.getReluPreMode() != ReluPreMode::NoRelu)
                 return reject("A1 matrix moves do not support auxiliary operands, results or fused modes.");
-            if (src == AddressSpace::VEC && dst == AddressSpace::MAT) {
+            if (src == AddressSpace::VEC && dst == AddressSpace::VEC) {
+                auto source = cast<TileBufType>(move.getSrc().getType());
+                auto destination = cast<TileBufType>(move.getDst().getType());
+                // General Vec validation enforces full, aligned, contiguous tiles.
+                if (source.getShape() != destination.getShape() ||
+                    source.getElementType() != destination.getElementType() || move.getAccToVecModeAttr())
+                    return reject("A1 Vec-to-Vec moves require matching full tiles without accumulator modes.");
+            } else if (src == AddressSpace::VEC && dst == AddressSpace::MAT) {
                 auto source = cast<TileBufType>(move.getSrc().getType());
                 auto destination = cast<TileBufType>(move.getDst().getType());
                 // Mat validation enforces C16 alignment/boxing and L1 capacity;
@@ -657,7 +664,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                     move.getAccToVecModeAttr().getValue() != AccToVecMode::SingleModeVec0)
                     return reject("A1 writeback requires matching FP32 ND Nx16 Vec and explicit single_mode_vec0.");
             } else {
-                return reject("A1 matrix moves require Vec-to-Mat, Mat-to-Left/Right or Acc-to-Vec.");
+                return reject("A1 moves require Vec-to-Vec, Vec-to-Mat, Mat-to-Left/Right or Acc-to-Vec.");
             }
         }
         if (auto matmul = dyn_cast<TMatmulOp>(op)) {
