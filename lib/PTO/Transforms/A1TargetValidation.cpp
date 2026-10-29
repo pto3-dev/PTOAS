@@ -273,11 +273,19 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
                 "A1 matrix tiles require FP16 ZZ/NZ Mat, ZZ Left (legacy NZ at K16), ZN Right or FP32 NZ Acc layouts.");
         if (auto alloc = dyn_cast<AllocTileOp>(op)) {
             if (alloc.getAddr()) {
-                auto addr = constantInt(alloc.getAddr());
-                if (!addr || *addr < 0 || *addr % spec.alignmentBytes ||
-                    static_cast<uint64_t>(*addr) > spec.capacityBytes - bytes)
-                    return op->emitError(
-                        "A1 matrix tile address must be static, aligned and within its memory budget.");
+                if (location == AddressSpace::MAT) {
+                    const auto addr = offsetFacts(alloc.getAddr());
+                    if (addr.lower < 0 || addr.multiple % spec.alignmentBytes ||
+                        static_cast<uint64_t>(addr.upper) > spec.capacityBytes - bytes)
+                        return op->emitError(
+                            "A1 Mat tile address must be bounded, aligned and within its L1 memory budget.");
+                } else {
+                    auto addr = constantInt(alloc.getAddr());
+                    if (!addr || *addr < 0 || *addr % spec.alignmentBytes ||
+                        static_cast<uint64_t>(*addr) > spec.capacityBytes - bytes)
+                        return op->emitError(
+                            "A1 matrix tile address must be static, aligned and within its memory budget.");
+                }
             }
         }
         return success();
