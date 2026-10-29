@@ -294,7 +294,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TDivOp, TExpOp, TMaxOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp,
+                TDivOp, TExpOp, TMaxOp, TReshapeOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp,
                 TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
@@ -342,6 +342,17 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr{};
             return space ? std::optional<AddressSpace>(space.getAddressSpace()) : std::nullopt;
         };
+        if (auto reshape = dyn_cast<TReshapeOp>(op)) {
+            auto source = cast<TileBufType>(reshape.getSrc().getType());
+            auto destination = cast<TileBufType>(reshape.getResult().getType());
+            if (locationOf(reshape.getSrc()) != AddressSpace::VEC ||
+                locationOf(reshape.getResult()) != AddressSpace::VEC ||
+                source.getBLayoutValueI32() != 0 || destination.getBLayoutValueI32() != 0 ||
+                source.getElementType() != destination.getElementType() ||
+                source.getShape()[0] * source.getShape()[1] !=
+                    destination.getShape()[0] * destination.getShape()[1])
+                return reject("A1 reshape requires row-major Vec views with matching element types and counts.");
+        }
         if (isa<TAddOp, TSubOp, TMulOp, TDivOp, TExpOp, TMaxOp>(op))
             for (Value operand : op->getOperands())
                 if (locationOf(operand) != AddressSpace::VEC ||

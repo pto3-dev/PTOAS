@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_f32_reshape(%out: !pto.ptr<f32>, %input: !pto.ptr<f32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 16 : index
+    %cols = arith.constant 16 : index
+    %count = arith.constant 256 : index
+    %in_view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %out_view = pto.make_tensor_view %out, shape = [%one, %count], strides = [%count, %one] : !pto.tensor_view<?x?xf32>
+    %in_part = pto.partition_view %in_view, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%one, %count] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x256xf32>
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 16x16xf32>
+    pto.tload ins(%in_part : !pto.partition_tensor_view<16x16xf32>) outs(%a : !pto.tile_buf<vec, 16x16xf32>)
+    %flat = pto.treshape %a : !pto.tile_buf<vec, 16x16xf32> -> !pto.tile_buf<vec, 1x256xf32>
+    pto.tadd ins(%flat, %flat : !pto.tile_buf<vec, 1x256xf32>, !pto.tile_buf<vec, 1x256xf32>) outs(%flat : !pto.tile_buf<vec, 1x256xf32>)
+    %back = pto.treshape %flat : !pto.tile_buf<vec, 1x256xf32> -> !pto.tile_buf<vec, 16x16xf32>
+    %again = pto.treshape %back : !pto.tile_buf<vec, 16x16xf32> -> !pto.tile_buf<vec, 1x256xf32>
+    pto.tstore ins(%again : !pto.tile_buf<vec, 1x256xf32>) outs(%out_part : !pto.partition_tensor_view<1x256xf32>)
+    return
+  }
+}
+// CHECK: a1_f32_reshape(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TRESHAPE(
+// CHECK: wait_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TADD(
+// CHECK: set_flag(PIPE_V, PIPE_MTE3,
+// CHECK: TRESHAPE(
+// CHECK: TRESHAPE(
+// CHECK: wait_flag(PIPE_V, PIPE_MTE3,
+// CHECK: TSTORE(
