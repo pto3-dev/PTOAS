@@ -294,8 +294,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TDivOp, TExpOp, TMaxOp, TReshapeOp, TExpandsOp, TRowExpandOp, TColExpandOp, TRowSumOp, TRowMaxOp, TColSumOp,
-                TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp,
+                TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
+                TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
@@ -342,6 +342,16 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr{};
             return space ? std::optional<AddressSpace>(space.getAddressSpace()) : std::nullopt;
         };
+        // Scalar access uses the S pipe and the Tile getter/setter, not an
+        // FP16 vector conversion. Keep the initial profile to full FP32 UB
+        // tiles; packed reduction columns and matrix address spaces differ.
+        if (isa<TGetValOp, TSetValOp>(op)) {
+            Value tile = isa<TGetValOp>(op) ? cast<TGetValOp>(op).getSrc() : cast<TSetValOp>(op).getDst();
+            auto type = dyn_cast<TileBufType>(tile.getType());
+            if (!type || locationOf(tile) != AddressSpace::VEC ||
+                !type.getElementType().isF32() || type.getBLayoutValueI32() != 0)
+                return reject("A1 scalar tile access requires a full row-major FP32 Vec tile.");
+        }
         if (auto reshape = dyn_cast<TReshapeOp>(op)) {
             auto source = cast<TileBufType>(reshape.getSrc().getType());
             auto destination = cast<TileBufType>(reshape.getResult().getType());
