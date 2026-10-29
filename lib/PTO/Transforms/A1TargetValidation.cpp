@@ -625,17 +625,38 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (auto insert = dyn_cast<TInsertOp>(op)) {
             auto source = cast<TileBufType>(insert.getSrc().getType());
             auto destination = cast<TileBufType>(insert.getDst().getType());
-            if (locationOf(insert.getSrc()) != AddressSpace::MAT || locationOf(insert.getDst()) != AddressSpace::LEFT ||
-                source.getShape()[1] != 16 || !source.getElementType().isF16() || !destination.getElementType().isF16())
-                return reject("A1 insertion requires a full FP16 C16 Mat panel and Left destination.");
             const auto row = offsetFacts(insert.getIndexRow());
             const auto column = offsetFacts(insert.getIndexCol());
-            // Prove complete-panel bounds and C16 alignment before emitting DMA.
-            // The ISA retains a release-build guard for direct native callers.
-            if (row.lower < 0 || column.lower < 0 || row.multiple % 16 || column.multiple % 16 ||
-                row.upper > destination.getShape()[0] - source.getShape()[0] ||
-                column.upper > destination.getShape()[1] - 16)
-                return reject("A1 insertion requires bounded aligned offsets within its complete Left tile.");
+            if (locationOf(insert.getSrc()) == AddressSpace::VEC &&
+                locationOf(insert.getDst()) == AddressSpace::VEC) {
+                const auto alignment = 32 / vectorElementBytes(source.getElementType());
+                if (source.getElementType() != destination.getElementType() || source.getBLayoutValueI32() != 0 ||
+                    destination.getBLayoutValueI32() != 0 || source.getShape()[0] > 2048 ||
+                    source.getShape()[0] > destination.getShape()[0] || source.getShape()[1] > destination.getShape()[1] ||
+                    row.lower < 0 || column.lower < 0 || column.multiple % alignment ||
+                    row.upper > destination.getShape()[0] - source.getShape()[0] ||
+                    column.upper > destination.getShape()[1] - source.getShape()[1] || insert.getSrc() == insert.getDst())
+                    return reject("A1 Vec insertion requires disjoint full row-major tiles and bounded aligned offsets.");
+                auto srcAlloc = insert.getSrc().getDefiningOp<AllocTileOp>();
+                auto dstAlloc = insert.getDst().getDefiningOp<AllocTileOp>();
+                auto srcAddr = srcAlloc ? constantInt(srcAlloc.getAddr()) : std::nullopt;
+                auto dstAddr = dstAlloc ? constantInt(dstAlloc.getAddr()) : std::nullopt;
+                if (srcAddr && dstAddr) {
+                    const int64_t srcBytes = source.getShape()[0] * source.getShape()[1] * vectorElementBytes(source.getElementType());
+                    const int64_t dstBytes = destination.getShape()[0] * destination.getShape()[1] * vectorElementBytes(destination.getElementType());
+                    if (*srcAddr < *dstAddr + dstBytes && *dstAddr < *srcAddr + srcBytes)
+                        return reject("A1 Vec insertion requires disjoint full row-major tiles and bounded aligned offsets.");
+                }
+            } else {
+                if (locationOf(insert.getSrc()) != AddressSpace::MAT || locationOf(insert.getDst()) != AddressSpace::LEFT ||
+                    source.getShape()[1] != 16 || !source.getElementType().isF16() || !destination.getElementType().isF16())
+                    return reject("A1 insertion requires a full FP16 C16 Mat panel and Left destination.");
+                // Prove complete-panel bounds and C16 alignment before emitting DMA.
+                if (row.lower < 0 || column.lower < 0 || row.multiple % 16 || column.multiple % 16 ||
+                    row.upper > destination.getShape()[0] - source.getShape()[0] ||
+                    column.upper > destination.getShape()[1] - 16)
+                    return reject("A1 insertion requires bounded aligned offsets within its complete Left tile.");
+            }
             if (insert.getFp() || insert.getPreQuantScalar() || insert.getAccToVecModeAttr() ||
                 insert.getTinsertModeAttr() || insert.getReluPreMode() != ReluPreMode::NoRelu)
                 return reject("A1 panel insertion does not support auxiliary operands or fused modes.");

@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_vec_panel_insert(%out: !pto.ptr<f32>, %in: !pto.ptr<f32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 128 : index
+    %half = arith.constant 16 : index
+    %cols = arith.constant 32 : index
+    %iv = pto.make_tensor_view %in, shape = [%rows, %half], strides = [%half, %one] : !pto.tensor_view<?x?xf32>
+    %ov = pto.make_tensor_view %out, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %ip = pto.partition_view %iv, offsets = [%zero, %zero], sizes = [%rows, %half] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<128x16xf32>
+    %op = pto.partition_view %ov, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<128x32xf32>
+    %src = pto.alloc_tile : !pto.tile_buf<vec, 128x16xf32>
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 128x32xf32>
+    pto.tload ins(%ip : !pto.partition_tensor_view<128x16xf32>) outs(%src : !pto.tile_buf<vec, 128x16xf32>)
+    pto.tload ins(%op : !pto.partition_tensor_view<128x32xf32>) outs(%dst : !pto.tile_buf<vec, 128x32xf32>)
+    pto.tinsert ins(%src, %zero, %half : !pto.tile_buf<vec, 128x16xf32>, index, index) outs(%dst : !pto.tile_buf<vec, 128x32xf32>)
+    pto.tstore ins(%dst : !pto.tile_buf<vec, 128x32xf32>) outs(%op : !pto.partition_tensor_view<128x32xf32>)
+    return
+  }
+}
+// CHECK-LABEL: a1_vec_panel_insert(
+// CHECK: TLOAD(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TINSERT(
+// CHECK: set_flag(PIPE_V, PIPE_MTE3,
+// CHECK: TSTORE(

@@ -13,9 +13,13 @@ static LogicalResult verifyTInsertA1(TInsertOp op) {
   auto common = verifyTInsertCommon(op, /*allowLowPrecision=*/false);
   if (failed(common)) return failure();
   const TInsertCommon &c = *common;
-  if (!c.srcSpace || !c.dstSpace || *c.srcSpace != pto::AddressSpace::MAT ||
-      *c.dstSpace != pto::AddressSpace::LEFT || !c.srcElem.isF16() || !c.dstElem.isF16())
-    return op.emitOpError("A1 insertion requires FP16 Mat-to-Left operands");
+  const bool matToLeft = c.srcSpace && c.dstSpace && *c.srcSpace == pto::AddressSpace::MAT &&
+                         *c.dstSpace == pto::AddressSpace::LEFT && c.srcElem.isF16() && c.dstElem.isF16();
+  const bool vecToVec = c.srcSpace && c.dstSpace && *c.srcSpace == pto::AddressSpace::VEC &&
+                        *c.dstSpace == pto::AddressSpace::VEC && c.srcElem == c.dstElem &&
+                        (c.srcElem.isF16() || c.srcElem.isF32());
+  if (!matToLeft && !vecToVec)
+    return op.emitOpError("A1 insertion requires FP16 Mat-to-Left or same-type FP16/FP32 Vec operands");
   if (op.getFp() || op.getPreQuantScalar() || op.getAccToVecModeAttr() || op.getTinsertModeAttr() ||
       op.getReluPreMode() != pto::ReluPreMode::NoRelu)
     return op.emitOpError("A1 panel insertion does not support auxiliary operands or fused modes");
