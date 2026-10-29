@@ -243,8 +243,8 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
             shape[1] != 16)
             return op->emitError(
                 "A1 legacy NZ Left requires full aligned rows in [16, 2048] and 16 columns; use ZZ for multi-K.");
-        if ((location == AddressSpace::RIGHT || location == AddressSpace::ACC) && shape[1] != 16)
-            return op->emitError("A1 multi-K GEMM requires N16 Right and Acc tiles.");
+        if ((location == AddressSpace::RIGHT || location == AddressSpace::ACC) && shape[1] != 16 && shape[1] != 32)
+            return op->emitError("A1 multi-K GEMM requires N16 or N32 Right and Acc tiles.");
         const auto spec = getA1MemorySpec(location);
         const uint64_t bytes = static_cast<uint64_t>(shape[0]) * shape[1] * vectorElementBytes(tile.getElementType());
         if (bytes > spec.capacityBytes)
@@ -439,7 +439,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         }
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
-                AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
+                AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, SubViewOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
                 TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
                 TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
@@ -458,6 +458,26 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (auto view = dyn_cast<MakeTensorViewOp>(op))
             if (failed(validateView(view)))
                 return WalkResult::interrupt();
+        if (auto subview = dyn_cast<SubViewOp>(op)) {
+            auto src = cast<TileBufType>(subview.getSource().getType());
+            auto dst = cast<TileBufType>(subview.getResult().getType());
+            auto srcSpace = dyn_cast_or_null<AddressSpaceAttr>(src.getMemorySpace());
+            auto dstSpace = dyn_cast_or_null<AddressSpaceAttr>(dst.getMemorySpace());
+            if (subview.getOffsets().size() != 2)
+                return reject("A1 accumulator subviews require two static offsets.");
+            const int64_t row = constantInt(subview.getOffsets()[0]).value_or(-1);
+            const int64_t col = constantInt(subview.getOffsets()[1]).value_or(-1);
+            // A complete N16 column of an NZ accumulator is one contiguous
+            // L0C span. Keep all rows, require an aligned static panel, and
+            // keep the parent allocation visible to synchronization.
+            if (!subview.getSource().getDefiningOp<AllocTileOp>() ||
+                !srcSpace || srcSpace.getAddressSpace() != AddressSpace::ACC ||
+                !dstSpace || dstSpace.getAddressSpace() != AddressSpace::ACC ||
+                src.getShape()[0] != dst.getShape()[0] || dst.getShape()[1] != 16 ||
+                row != 0 || col < 0 || col % 16 || col > src.getShape()[1] - 16 ||
+                subview.getValidRow() || subview.getValidCol())
+                return reject("A1 accumulator subviews require one full-height aligned N16 column panel.");
+        }
         if (auto load = dyn_cast<TLoadOp>(op)) {
             if (load.getPadModeAttr() || load.getPadValue() || load.getLeftPaddingNum() || load.getRightPaddingNum() ||
                 load.getInitOutBuffer() || load.getInitCondition() || load.getCachePolicyAttr())
@@ -622,8 +642,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 if (move.getAccToVecModeAttr())
                     return reject("A1 operand moves do not accept accumulator modes.");
             } else if (src == AddressSpace::ACC && dst == AddressSpace::VEC) {
+                auto source = cast<TileBufType>(move.getSrc().getType());
                 auto tile = cast<TileBufType>(move.getDst().getType());
-                if (tile.getShape()[0] != cast<TileBufType>(move.getSrc().getType()).getShape()[0] ||
+                if (source.getShape()[1] != 16 || tile.getShape()[0] != source.getShape()[0] ||
                     tile.getShape()[1] != 16 || !tile.getElementType().isF32() || !move.getAccToVecModeAttr() ||
                     move.getAccToVecModeAttr().getValue() != AccToVecMode::SingleModeVec0)
                     return reject("A1 writeback requires matching FP32 ND Nx16 Vec and explicit single_mode_vec0.");

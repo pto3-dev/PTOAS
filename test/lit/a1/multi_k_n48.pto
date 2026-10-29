@@ -9,8 +9,8 @@
 // RUN: not ptoas --pto-arch=a1 %s 2>&1 | FileCheck %s
 module attributes {pto.target_arch = "a1"} {
   func.func @unsupported() {
-    %tile = pto.alloc_tile : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>
+    %tile = pto.alloc_tile : !pto.tile_buf<right, 144x48xf16, blayout=row_major, slayout=col_major, fractal=512>
     return
   }
 }
-// CHECK: A1 multi-K GEMM requires N16 Right and Acc tiles
+// CHECK: A1 multi-K GEMM requires N16 or N32 Right and Acc tiles
