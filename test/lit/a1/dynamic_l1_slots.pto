@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 --pto-level=level3 --enable-insert-sync %s -o - | FileCheck %s
+// RUN: sed 's/slot_base = arith.constant 0/slot_base = arith.constant 1/' %s > %t.align.pto
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 --enable-insert-sync %t.align.pto -o - 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: sed 's/slot_base = arith.constant 0/slot_base = arith.constant 523776/' %s > %t.bounds.pto
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 --enable-insert-sync %t.bounds.pto -o - 2>&1 | FileCheck %s --check-prefix=REJECT
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_dynamic_l1_slots(%input: !pto.ptr<f16>, %weight: !pto.ptr<f16>, %output: !pto.ptr<f32>) attributes {pto.entry} {
+    pto.section.cube {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c5 = arith.constant 5 : index
+    %c16 = arith.constant 16 : index
+    %c80 = arith.constant 80 : index
+    %c512 = arith.constant 512 : index
+    %base = arith.constant 0 : i64
+    %slot_base = arith.constant 0 : i64
+    %weight_addr = arith.constant 4096 : i64
+    %in_view = pto.make_tensor_view %input, shape = [%c80, %c16], strides = [%c16, %c1] : !pto.tensor_view<?x?xf16>
+    %weight_view = pto.make_tensor_view %weight, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<?x?xf16>
+    %out_view = pto.make_tensor_view %output, shape = [%c80, %c16], strides = [%c16, %c1] : !pto.tensor_view<?x?xf32>
+    %weight_part = pto.partition_view %weight_view, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %wm = pto.alloc_tile addr = %weight_addr : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %right = pto.alloc_tile addr = %base : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>
+    %left = pto.alloc_tile addr = %base : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    %acc = pto.alloc_tile addr = %base : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>
+    %vec = pto.alloc_tile addr = %base : !pto.tile_buf<vec, 16x16xf32>
+    pto.tload ins(%weight_part : !pto.partition_tensor_view<16x16xf16>) outs(%wm : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tmov ins(%wm : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%right : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    scf.for %i = %c0 to %c5 step %c1 {
+      %slot = arith.remsi %i, %c2 : index
+      %slot_offset = arith.muli %slot, %c512 : index
+      %slot_i64 = arith.index_cast %slot_offset : index to i64
+      %addr = arith.addi %slot_base, %slot_i64 : i64
+      %tile = pto.alloc_tile addr = %addr : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+      %row = arith.muli %i, %c16 : index
+      %in_part = pto.partition_view %in_view, offsets = [%row, %c0], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+      %out_part = pto.partition_view %out_view, offsets = [%row, %c0], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<16x16xf32>
+      pto.tload ins(%in_part : !pto.partition_tensor_view<16x16xf16>) outs(%tile : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+      pto.tmov ins(%tile : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+      pto.tmatmul ins(%left, %right : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>) outs(%acc : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>)
+      pto.tmov ins(%acc : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>) outs(%vec : !pto.tile_buf<vec, 16x16xf32>) {accToVecMode = #pto.acc_to_vec_mode<single_mode_vec0>}
+      pto.tstore ins(%vec : !pto.tile_buf<vec, 16x16xf32>) outs(%out_part : !pto.partition_tensor_view<16x16xf32>)
+    }
+    }
+    return
+  }
+}
+// CHECK-LABEL: a1_dynamic_l1_slots(
+// CHECK: TASSIGN(
+// CHECK: TLOAD(
+// CHECK: TMOV(
+// CHECK: TMATMUL(
+// CHECK: TSTORE(
+// REJECT: A1 Mat tile address must be bounded, aligned and within its L1 memory budget
