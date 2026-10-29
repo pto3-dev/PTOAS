@@ -262,6 +262,39 @@ static Value computeTileAddress(Value value, IRRewriter &rewriter,
   return {};
 }
 
+// A C16 NZ Mat panel has no second column fractal. Its row-aligned
+// subview therefore has the same physical packing even when the nominal
+// stride to a non-existent next column fractal differs.
+static bool isAlignedMatRow(Value value) {
+  APInt constant;
+  if (matchPattern(value, m_ConstantInt(&constant)))
+    return constant.srem(16) == 0;
+  if (auto mul = value.getDefiningOp<arith::MulIOp>()) {
+    APInt factor;
+    return (matchPattern(mul.getLhs(), m_ConstantInt(&factor)) && factor.srem(16) == 0) ||
+           (matchPattern(mul.getRhs(), m_ConstantInt(&factor)) && factor.srem(16) == 0);
+  }
+  return false;
+}
+
+static bool isCompactC16MatRows(pto::SubViewOp op) {
+  auto source = op.getSource().getType();
+  auto result = op.getResult().getType();
+  auto sourceSpace = dyn_cast_or_null<pto::AddressSpaceAttr>(source.getMemorySpace());
+  auto resultSpace = dyn_cast_or_null<pto::AddressSpaceAttr>(result.getMemorySpace());
+  APInt column;
+  return sourceSpace && resultSpace && sourceSpace.getAddressSpace() == pto::AddressSpace::MAT &&
+         resultSpace.getAddressSpace() == pto::AddressSpace::MAT && source.getElementType().isF16() &&
+         result.getElementType() == source.getElementType() && source.getShape().size() == 2 &&
+         result.getShape().size() == 2 && source.getShape()[1] == 16 && result.getShape()[1] == 16 &&
+         source.getBLayoutValueI32() == kBLayoutColMajor && result.getBLayoutValueI32() == kBLayoutColMajor &&
+         source.getSLayoutValueI32() == kSlayoutRowMajor && result.getSLayoutValueI32() == kSlayoutRowMajor &&
+         source.getSFractalSizeI32() == 512 && result.getSFractalSizeI32() == 512 &&
+         source.getCompactModeI32() == 0 && result.getCompactModeI32() == 0 && op.getOffsets().size() == 2 &&
+         matchPattern(op.getOffsets()[1], m_ConstantInt(&column)) && column.isZero() &&
+         isAlignedMatRow(op.getOffsets()[0]);
+}
+
 static pto::TileBufType getSubviewPhysicalType(pto::SubViewOp op) {
   pto::TileBufType sourceType = op.getSource().getType();
   pto::TileBufType resultType = op.getResult().getType();
@@ -282,7 +315,7 @@ static pto::TileBufType getSubviewPhysicalType(pto::SubViewOp op) {
                             inheritedColStride) &&
       getTilePointerStrides(compactChildType, childRowStride, childColStride) &&
       inheritedRowStride == childRowStride &&
-      inheritedColStride == childColStride) {
+      (inheritedColStride == childColStride || isCompactC16MatRows(op))) {
     physicalShape = resultType.getShape();
   }
 

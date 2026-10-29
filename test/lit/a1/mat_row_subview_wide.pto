@@ -1,0 +1,45 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: not ptoas --pto-arch=a1 %s -o /dev/null 2>&1 | FileCheck %s
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_mat_row_subview(%out: !pto.ptr<f32>, %in: !pto.ptr<f16>, %weight: !pto.ptr<f16>) attributes {pto.entry} {
+    pto.section.cube {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %four = arith.constant 4 : index
+    %c16 = arith.constant 16 : index
+    %c32 = arith.constant 32 : index
+    %c128 = arith.constant 128 : index
+    %iv = pto.make_tensor_view %in, shape = [%c128, %c32], strides = [%c32, %one] : !pto.tensor_view<?x?xf16>
+    %wv = pto.make_tensor_view %weight, shape = [%c16, %c16], strides = [%c16, %one] : !pto.tensor_view<?x?xf16>
+    %ov = pto.make_tensor_view %out, shape = [%c128, %c16], strides = [%c16, %one] : !pto.tensor_view<?x?xf32>
+    %ip = pto.partition_view %iv, offsets = [%zero, %zero], sizes = [%c128, %c32] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<128x32xf16>
+    %wp = pto.partition_view %wv, offsets = [%zero, %zero], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %src = pto.alloc_tile : !pto.tile_buf<mat, 128x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %wm = pto.alloc_tile : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 32x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    %right = pto.alloc_tile : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>
+    %acc = pto.alloc_tile : !pto.tile_buf<acc, 32x16xf32, blayout=col_major, slayout=row_major, fractal=1024>
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 32x16xf32>
+    pto.tload ins(%ip : !pto.partition_tensor_view<128x32xf16>) outs(%src : !pto.tile_buf<mat, 128x32xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tload ins(%wp : !pto.partition_tensor_view<16x16xf16>) outs(%wm : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tmov ins(%wm : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%right : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    scf.for %i = %zero to %four step %one {
+      %row = arith.muli %i, %c32 : index
+      %view = pto.subview %src[%row, %zero] sizes [32, 16] : !pto.tile_buf<mat, 128x32xf16, blayout=col_major, slayout=row_major, fractal=512> -> !pto.tile_buf<mat, 32x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+      pto.tinsert ins(%view, %zero, %zero : !pto.tile_buf<mat, 32x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%left : !pto.tile_buf<left, 32x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+      pto.tmatmul ins(%left, %right : !pto.tile_buf<left, 32x16xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>) outs(%acc : !pto.tile_buf<acc, 32x16xf32, blayout=col_major, slayout=row_major, fractal=1024>)
+      pto.tmov ins(%acc : !pto.tile_buf<acc, 32x16xf32, blayout=col_major, slayout=row_major, fractal=1024>) outs(%dst : !pto.tile_buf<vec, 32x16xf32>) {accToVecMode = #pto.acc_to_vec_mode<single_mode_vec0>}
+      %op = pto.partition_view %ov, offsets = [%row, %zero], sizes = [%c32, %c16] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<32x16xf32>
+      pto.tstore ins(%dst : !pto.tile_buf<vec, 32x16xf32>) outs(%op : !pto.partition_tensor_view<32x16xf32>)
+    }
+    }
+    return
+  }
+}
+// CHECK: A1 Mat subviews require a bounded aligned full-width C16 row interval
