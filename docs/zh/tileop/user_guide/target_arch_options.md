@@ -74,16 +74,20 @@ A1 耦合核 dispatch 最多使用 8 个 block。DMA 可使用由 `pto.get_block
 
 ### A1 多 K GEMM
 
-A1 允许公共 FP16 `M x K` Left、`K x 16` Right 和 FP32 `M x 16` Acc，M/K 为
+A1 允许公共 FP16 `M x K` Left、`K x N` Right 和 FP32 `M x N` Acc，N 为 16 或 32，M/K 为
 [16, 2048] 内的静态 16 对齐维度，有效形状必须完整。Mat 可以使用 ZZ 或 NZ，
 多 K Left 必须使用 ZZ；既有 NZ Left 仅在 K=16 时有效。Right 为 ZN，Acc 为 NZ。
-分配及地址均按实际 `M*K*sizeof(dtype)` 验证对应 L1/L0 存储预算，避免沿用
-旧 N16 输入的固定列数低估缓冲区。N>16、部分有效 tile 及无法证明安全的 DMA
-仍被拒绝。
+分配及地址按每个块的实际形状和元素大小验证对应 L1/L0 存储预算，避免固定列数
+低估缓冲区。N 不为 16 或 32、部分有效 tile 及无法证明安全的 DMA 仍被拒绝。
 
 此路径需要支持多 K 的 A1 PTO-ISA `TLOAD`、`TMOV`、`TMATMUL` 和
 `TMATMUL_ACC` 实现；仅升级编译器无法让旧 ISA 头文件接受宽 K。
-硬件 im2col 的 ConvTile 编译和 PyPTO 前端接入仍需独立支持。
+硬件 im2col 的 ConvTile 编译已支持；PyPTO 前端接入仍需独立支持。
+
+N32 Acc 可通过 `pto.subview` 选择静态、对齐且覆盖全部 M 行的单个 N16 列块，
+然后复用现有 N16 Acc→Vec 写回；短行、动态列偏移和其他存储空间的子视图会被
+拒绝。视图保留父块别名以维持自动同步。N32 路径需要配套支持 N32 Right 搬运
+和矩阵乘的 A1 PTO-ISA；PyPTO 前端和整模接入仍需独立支持与验证。
 
 原生组合回归位于 `test/npu_validation/scripts/test_a1_multi_k_gemm.py`。
 设置 `PTO_ISA_ROOT` 指向上述 ISA 实现后，使用 `python -m pytest` 和 `-n 1`
