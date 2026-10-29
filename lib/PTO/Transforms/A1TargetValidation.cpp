@@ -92,6 +92,130 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
 
 unsigned vectorElementBytes(Type element) { return element.isF16() ? 2 : 4; }
 
+LogicalResult validateConvImage(Operation* op, ConvTileBufType image)
+{
+    const auto shape = image.getShape();
+    const auto space = image.getMemorySpace();
+    const auto layout = image.getLayout();
+    if (!image.getElementType().isF16() || !space || space.getAddressSpace() != AddressSpace::MAT ||
+        !layout || layout.getValue() != ConvLayout::NC1HWC0 || shape.size() != 5 || shape[0] != 1 ||
+        shape[1] <= 0 || shape[1] > 4095 || shape[2] <= 0 || shape[2] > 65535 ||
+        shape[3] <= 0 || shape[3] > 65535 || shape[4] != 16)
+        return op->emitError("A1 convolution images require static FP16 NC1HWC0 Mat storage with N1/C16.");
+    const uint64_t elements = static_cast<uint64_t>(shape[1]) * shape[2] * shape[3] * 16;
+    const int64_t buffer = image.getBufferSizeValue();
+    const auto spec = getA1MemorySpec(AddressSpace::MAT);
+    if (buffer < 0 || static_cast<uint64_t>(buffer) < elements || static_cast<uint64_t>(buffer) > spec.capacityBytes / 2)
+        return op->emitError("A1 convolution image allocation must cover the full image and fit L1.");
+    if (auto alloc = dyn_cast<AllocTileOp>(op)) {
+        if (alloc.getAddr()) {
+            auto addr = constantInt(alloc.getAddr());
+            const uint64_t bytes = static_cast<uint64_t>(buffer) * 2;
+            if (!addr || *addr < 0 || *addr % spec.alignmentBytes ||
+                static_cast<uint64_t>(*addr) > spec.capacityBytes - bytes)
+                return op->emitError("A1 convolution image address must be static, aligned and fit L1.");
+        }
+    }
+    return success();
+}
+
+LogicalResult validateConvView(MakeTensorViewOp view)
+{
+    auto type = cast<TensorViewType>(view.getResult().getType());
+    auto layout = dyn_cast_or_null<ConvLayoutAttr>(type.getLayout());
+    if (!layout || layout.getValue() != ConvLayout::NC1HWC0 || !type.getElementType().isF16() ||
+        view.getShape().size() != 5 || view.getStrides().size() != 5)
+        return view.emitError("A1 image DMA requires an FP16 NC1HWC0 five-dimensional view.");
+    int64_t shape[5], stride[5];
+    for (unsigned i = 0; i < 5; ++i) {
+        auto dim = constantInt(view.getShape()[i]);
+        auto step = constantInt(view.getStrides()[i]);
+        if (!dim || !step || *dim <= 0 || *step <= 0)
+            return view.emitError("A1 image DMA requires static positive shape and strides.");
+        shape[i] = *dim;
+        stride[i] = *step;
+    }
+    if (shape[0] != 1 || shape[1] > 4095 || shape[2] > 65535 || shape[3] > 65535 || shape[4] != 16)
+        return view.emitError("A1 image DMA requires one C16 image with bounded spatial dimensions.");
+    const int64_t pixels = shape[2] * shape[3];
+    const bool contiguous = stride[4] == 1 && stride[3] == 16 && stride[2] == shape[3] * 16 &&
+                            stride[1] == pixels * 16 && stride[0] == shape[1] * pixels * 16;
+    const int64_t row = stride[3];
+    const bool nhwc = row >= shape[1] * 16 && row % 16 == 0 && row / 16 - 1 <= 65535 && stride[4] == 1 &&
+                      stride[1] == 16 && stride[2] == shape[3] * row && stride[0] >= pixels * row;
+    if (!contiguous && !nhwc)
+        return view.emitError("A1 image DMA requires contiguous NC1HWC0 or a bounded C16 NHWC view.");
+    return success();
+}
+
+LogicalResult validateConvTransfer(TLoadOp load, ConvTileBufType image)
+{
+    auto partition = load.getSrc().getDefiningOp<PartitionViewOp>();
+    auto view = partition ? partition.getSource().getDefiningOp<MakeTensorViewOp>() : MakeTensorViewOp{};
+    if (!view || partition.getOffsets().size() != 5 || partition.getSizes().size() != 5 ||
+        failed(validateConvView(view)))
+        return load.emitError("A1 image DMA requires a direct five-dimensional image partition.");
+    auto shape = image.getShape();
+    int64_t sourceShape[5];
+    OffsetFacts offsets[5];
+    for (unsigned i = 0; i < 5; ++i) {
+        auto sourceDim = constantInt(view.getShape()[i]);
+        auto size = constantInt(partition.getSizes()[i]);
+        offsets[i] = offsetFacts(partition.getOffsets()[i]);
+        if (!sourceDim || !size || *size != shape[i] || offsets[i].lower < 0 ||
+            *size > *sourceDim || offsets[i].upper > *sourceDim - *size)
+            return load.emitError("A1 image DMA partition must be statically bounded and match the image.");
+        sourceShape[i] = *sourceDim;
+    }
+    // A contiguous NC1HWC0 image is loaded whole. NHWC views may select C1
+    // blocks and spatial row bands but retain the complete physical width.
+    const auto stride1 = constantInt(view.getStrides()[1]);
+    const auto row = constantInt(view.getStrides()[3]);
+    const bool nhwc = stride1 == 16 && row && *row >= sourceShape[1] * 16;
+    if ((!nhwc && (shape != ArrayRef<int64_t>(sourceShape) ||
+                   llvm::any_of(offsets, [](const OffsetFacts& f) { return f.lower != 0 || f.upper != 0; }))) ||
+        (nhwc && (shape[3] != sourceShape[3] || offsets[0].lower != 0 || offsets[0].upper != 0 ||
+                  offsets[3].lower != 0 || offsets[3].upper != 0 || offsets[4].lower != 0 || offsets[4].upper != 0)))
+        return load.emitError("A1 image DMA supports whole NC1HWC0 images or full-width NHWC row bands.");
+    return success();
+}
+
+LogicalResult validateImg2col(TImg2colOp op)
+{
+    auto image = cast<ConvTileBufType>(op.getSrc().getType());
+    auto left = cast<TileBufType>(op.getDst().getType());
+    auto alloc = op.getSrc().getDefiningOp<AllocTileOp>();
+    if (!alloc || !alloc.getConfig() || op.getFmatrixMode() != FmatrixMode::FMATRIX_A_AUTO)
+        return op.emitError("A1 im2col requires a directly allocated image with automatic FMATRIX A.");
+    const auto config = *alloc.getConfig();
+    const auto shape = image.getShape();
+    const int64_t fh = config.getFilterH().getInt(), fw = config.getFilterW().getInt();
+    const int64_t dh = config.getDilationH().getInt(), dw = config.getDilationW().getInt();
+    const int64_t sh = config.getStrideH().getInt(), sw = config.getStrideW().getInt();
+    const auto padding = config.getPadList();
+    if (config.getFmapH().getInt() != shape[2] || config.getFmapW().getInt() != shape[3] ||
+        config.getChannelSize().getInt() != shape[1] * 16 || fh <= 0 || fh > 255 || fw <= 0 || fw > 255 ||
+        dh <= 0 || dh > 255 || dw <= 0 || dw > 255 || sh <= 0 || sh > 63 || sw <= 0 || sw > 63 ||
+        config.getTranspose().getValue() || config.getRepeatStride().getInt() != 0 ||
+        config.getRepeatTime().getInt() != 1 || config.getRepeatMode().getInt() != 0 ||
+        config.getDstStride().getInt() != 0 || config.getDstMposition().getInt() != 0)
+        return op.emitError("A1 im2col geometry or repeat mode is unsupported.");
+    const int64_t spanH = shape[2] + padding[2] + padding[3] - dh * (fh - 1) - 1;
+    const int64_t spanW = shape[3] + padding[0] + padding[1] - dw * (fw - 1) - 1;
+    if (spanH < 0 || spanW < 0)
+        return op.emitError("A1 im2col requires nonempty output geometry.");
+    const int64_t outPixels = (spanH / sh + 1) * (spanW / sw + 1);
+    const int64_t reduction = shape[1] * 16 * fh * fw;
+    const auto m = op.getPosM() ? offsetFacts(op.getPosM()) : OffsetFacts{0, 0, 0};
+    const auto k = op.getPosK() ? offsetFacts(op.getPosK()) : OffsetFacts{0, 0, 0};
+    auto size = left.getShape();
+    if (m.lower < 0 || k.lower < 0 || m.upper > 65535 || k.upper > 65535 || k.multiple % 16 ||
+        size[0] > outPixels || m.upper > outPixels - size[0] ||
+        size[1] > reduction || k.upper > reduction - size[1])
+        return op.emitError("A1 im2col requires bounded M and aligned bounded K windows.");
+    return success();
+}
+
 LogicalResult validateTile(Operation* op, TileBufType tile)
 {
     auto shape = tile.getShape();
@@ -179,6 +303,8 @@ LogicalResult validateView(MakeTensorViewOp view)
         if (size && *size > 0 && constantInt(view.getStrides()[0]) == 1)
             return success();
     }
+    if (isa_and_nonnull<ConvLayoutAttr>(type.getLayout()))
+        return validateConvView(view);
     if (view.getShape().size() != 2 || view.getStrides().size() != 2)
         return view.emitError("A1 vector lowering requires two-dimensional tensor views.");
     auto rows = constantInt(view.getShape()[0]);
@@ -234,6 +360,8 @@ LogicalResult validateType(Operation* op, Type type)
 {
     if (auto tile = dyn_cast<TileBufType>(type))
         return validateTile(op, tile);
+    if (auto image = dyn_cast<ConvTileBufType>(type))
+        return validateConvImage(op, image);
     Type element;
     if (auto ptr = dyn_cast<PtrType>(type))
         element = ptr.getElementType();
@@ -295,7 +423,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
                 TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
-                TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TCvtOp, SectionCubeOp, SectionVectorOp,
+                TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
@@ -316,6 +444,11 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (load.getPadModeAttr() || load.getPadValue() || load.getLeftPaddingNum() || load.getRightPaddingNum() ||
                 load.getInitOutBuffer() || load.getInitCondition() || load.getCachePolicyAttr())
                 return reject("A1 load padding, initialization and cache-policy modes are unavailable.");
+            if (auto image = dyn_cast<ConvTileBufType>(load.getDst().getType())) {
+                if (failed(validateConvTransfer(load, image)))
+                    return WalkResult::interrupt();
+                return WalkResult::advance();
+            }
             const auto tile = dyn_cast<TileBufType>(load.getDst().getType());
             if (!tile)
                 return reject("A1 loads require tile-buffer destinations.");
@@ -325,6 +458,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (failed(validateTransfer(op, load.getSrc(), load.getDst())))
                 return WalkResult::interrupt();
         }
+        if (auto img2col = dyn_cast<TImg2colOp>(op))
+            if (failed(validateImg2col(img2col)))
+                return WalkResult::interrupt();
         if (auto store = dyn_cast<TStoreOp>(op)) {
             if (store.getFp() || store.getPreQuantScalar() || store.getAtomicType() != AtomicType::AtomicNone ||
                 store.getStPhase() != STPhase::Unspecified || store.getReluPreMode() != ReluPreMode::NoRelu)
