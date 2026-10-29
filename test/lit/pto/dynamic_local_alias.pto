@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a3 --pto-level=level3 --enable-insert-sync %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a3"} {
+  func.func @dynamic_local_alias(%input: !pto.ptr<f32, gm>, %output: !pto.ptr<f32, gm>, %addr: i64) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %base = arith.constant 0 : i64
+    %in_view = pto.make_tensor_view %input, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<16x16xf32>
+    %out_view = pto.make_tensor_view %output, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<16x16xf32>
+    %in_part = pto.partition_view %in_view, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %out_part = pto.partition_view %out_view, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %static = pto.alloc_tile addr = %base : !pto.tile_buf<vec, 16x16xf32>
+    %dynamic = pto.alloc_tile addr = %addr : !pto.tile_buf<vec, 16x16xf32>
+    pto.tstore ins(%static : !pto.tile_buf<vec, 16x16xf32>) outs(%out_part : !pto.partition_tensor_view<16x16xf32>)
+    pto.tload ins(%in_part : !pto.partition_tensor_view<16x16xf32>) outs(%dynamic : !pto.tile_buf<vec, 16x16xf32>)
+    return
+  }
+
+  func.func @dynamic_local_alias_reverse(%input: !pto.ptr<f32, gm>, %output: !pto.ptr<f32, gm>, %addr: i64) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %base = arith.constant 0 : i64
+    %in_view = pto.make_tensor_view %input, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<16x16xf32>
+    %out_view = pto.make_tensor_view %output, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<16x16xf32>
+    %in_part = pto.partition_view %in_view, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %out_part = pto.partition_view %out_view, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %static = pto.alloc_tile addr = %base : !pto.tile_buf<vec, 16x16xf32>
+    %dynamic = pto.alloc_tile addr = %addr : !pto.tile_buf<vec, 16x16xf32>
+    pto.tstore ins(%dynamic : !pto.tile_buf<vec, 16x16xf32>) outs(%out_part : !pto.partition_tensor_view<16x16xf32>)
+    pto.tload ins(%in_part : !pto.partition_tensor_view<16x16xf32>) outs(%static : !pto.tile_buf<vec, 16x16xf32>)
+    return
+  }
+
+  func.func @dynamic_local_alias_both(%input: !pto.ptr<f32, gm>, %output: !pto.ptr<f32, gm>, %addr: i64, %other: i64) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %base = arith.constant 0 : i64
+    %in_view = pto.make_tensor_view %input, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<16x16xf32>
+    %out_view = pto.make_tensor_view %output, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<16x16xf32>
+    %in_part = pto.partition_view %in_view, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %out_part = pto.partition_view %out_view, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<16x16xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %static = pto.alloc_tile addr = %other : !pto.tile_buf<vec, 16x16xf32>
+    %dynamic = pto.alloc_tile addr = %addr : !pto.tile_buf<vec, 16x16xf32>
+    pto.tstore ins(%static : !pto.tile_buf<vec, 16x16xf32>) outs(%out_part : !pto.partition_tensor_view<16x16xf32>)
+    pto.tload ins(%in_part : !pto.partition_tensor_view<16x16xf32>) outs(%dynamic : !pto.tile_buf<vec, 16x16xf32>)
+    return
+  }
+}
+// CHECK-LABEL: AICORE void dynamic_local_alias(
+// CHECK: TSTORE(
+// CHECK: set_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID[[E:[0-9]+]]);
+// CHECK: wait_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID[[E]]);
+// CHECK: TLOAD(
+// CHECK-LABEL: AICORE void dynamic_local_alias_reverse(
+// CHECK: TSTORE(
+// CHECK: set_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID[[R:[0-9]+]]);
+// CHECK: wait_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID[[R]]);
+// CHECK: TLOAD(
+// CHECK-LABEL: AICORE void dynamic_local_alias_both(
+// CHECK: TSTORE(
+// CHECK: set_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID[[B:[0-9]+]]);
+// CHECK: wait_flag(PIPE_MTE3, PIPE_MTE2, EVENT_ID[[B]]);
+// CHECK: TLOAD(
