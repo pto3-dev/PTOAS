@@ -50,9 +50,10 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
         return {1, 8, 1};
     if (auto cast = value.getDefiningOp<arith::IndexCastOp>()) {
         auto facts = offsetFacts(cast.getIn(), depth + 1);
-        // Widening i32 to index preserves the bounded hardware identity.
-        // Narrowing a general value is intentionally outside this profile.
-        if (cast.getOut().getType().isIndex() && cast.getIn().getType().isInteger(64))
+        // A1 index and i64 use the same width. Narrower integer casts
+        // are intentionally outside this bounded profile.
+        if ((cast.getOut().getType().isIndex() && cast.getIn().getType().isInteger(64)) ||
+            (cast.getIn().getType().isIndex() && cast.getOut().getType().isInteger(64)))
             return facts;
         return {};
     }
@@ -82,6 +83,10 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
     auto a = offsetFacts(op->getOperand(0), depth + 1);
     auto b = offsetFacts(op->getOperand(1), depth + 1);
     const auto multiple = std::gcd(a.multiple, b.multiple);
+    if (isa<arith::RemSIOp>(op) && a.lower >= 0 && b.lower == b.upper && b.lower > 0) {
+        const int64_t upper = std::min(a.upper, b.lower - 1);
+        return {0, upper, upper == 0 ? 0U : 1U};
+    }
     if (isa<arith::MaxSIOp>(op))
         return {std::max(a.lower, b.lower), std::max(a.upper, b.upper), multiple};
     if (isa<arith::MinSIOp>(op))
@@ -291,10 +296,14 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
         return op->emitError("A1 vector tile must have 32-byte-aligned rows and fit the 128 KiB UB budget.");
     if (auto alloc = dyn_cast<AllocTileOp>(op)) {
         if (alloc.getAddr()) {
-            auto addr = constantInt(alloc.getAddr());
+            const auto addr = offsetFacts(alloc.getAddr());
             uint64_t bytes = static_cast<uint64_t>(shape[0] * shape[1]) * elementBytes;
-            if (!addr || *addr < 0 || *addr % 32 || static_cast<uint64_t>(*addr) > kA1UBCapacityBytes - bytes)
-                return op->emitError("A1 tile address must be static, aligned, and within the 128 KiB UB budget.");
+            if (addr.lower < 0 || addr.multiple % 32 ||
+                static_cast<uint64_t>(addr.upper) > kA1UBCapacityBytes - bytes) {
+                if (constantInt(alloc.getAddr()))
+                    return op->emitError("A1 tile address must be static, aligned, and within the 128 KiB UB budget.");
+                return op->emitError("A1 tile address must be bounded, aligned, and within the 128 KiB UB budget.");
+            }
         }
     }
     return success();
