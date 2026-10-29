@@ -1,0 +1,33 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: sed 's/arith.addi %row, %c16/arith.addi %row, %c32/' %s > %t.invalid.pto
+// RUN: not ptoas --pto-arch=a1 %t.invalid.pto -o - 2>&1 | FileCheck %s --check-prefix=INVALID
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @pipeline_dma_bounds(%input: !pto.ptr<f32>) attributes {pto.entry} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c6 = arith.constant 6 : index
+    %c16 = arith.constant 16 : index
+    %c32 = arith.constant 32 : index
+    %c96 = arith.constant 96 : index
+    %view = pto.make_tensor_view %input, shape = [%c96, %c16], strides = [%c16, %c1] : !pto.tensor_view<?x?xf32>
+    scf.for %i = %c0 to %c6 step %c2 {
+      %row = arith.muli %i, %c16 : index
+      %row_next = arith.addi %row, %c16 : index
+      %offset = arith.maxsi %row_next, %c0 : index
+      %part = pto.partition_view %view, offsets = [%offset, %c0], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<16x16xf32>
+      %tile = pto.alloc_tile : !pto.tile_buf<vec, 16x16xf32>
+      pto.tload ins(%part : !pto.partition_tensor_view<16x16xf32>) outs(%tile : !pto.tile_buf<vec, 16x16xf32>)
+    }
+    return
+  }
+}
+// CHECK: pipeline_dma_bounds(
+// CHECK: TLOAD(
+// INVALID: A1 DMA partition must fit within its source tensor view
