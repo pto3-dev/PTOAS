@@ -62,8 +62,17 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
             auto lower = offsetFacts(loop.getLowerBound(), depth + 1);
             auto upper = offsetFacts(loop.getUpperBound(), depth + 1);
             auto step = offsetFacts(loop.getStep(), depth + 1);
-            if (step.lower > 0 && upper.upper > std::numeric_limits<int64_t>::min())
-                return {lower.lower, upper.upper - 1, std::gcd(lower.multiple, step.multiple)};
+            if (step.lower > 0 && upper.upper > std::numeric_limits<int64_t>::min()) {
+                int64_t last = upper.upper - 1;
+                // For constant loop bounds and step, the upper bound is exclusive
+                // and the final induction value need not be upper - 1. Preserve
+                // that precision for pipelined loops with a step greater than 1.
+                int64_t distance;
+                if (lower.lower == lower.upper && upper.lower == upper.upper && step.lower == step.upper &&
+                    last >= lower.lower && !llvm::SubOverflow(last, lower.lower, distance))
+                    last -= distance % step.lower;
+                return {lower.lower, last, std::gcd(lower.multiple, step.multiple)};
+            }
         }
         return {};
     }
