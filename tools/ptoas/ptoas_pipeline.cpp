@@ -52,6 +52,19 @@ struct FormEmitCExpressionsCompatPass final
                          OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FormEmitCExpressionsCompatPass)
 
+  static bool isFloatingScalar(Type type) {
+    auto opaque = dyn_cast<emitc::OpaqueType>(type);
+    return isa<FloatType>(type) ||
+        (opaque && (opaque.getValue() == "float" || opaque.getValue() == "double" ||
+                    opaque.getValue() == "half" || opaque.getValue() == "bfloat16_t"));
+  }
+
+  static bool isFloatingCast(Operation *op) {
+    return isa<emitc::CastOp>(op) &&
+        (isFloatingScalar(op->getResult(0).getType()) ||
+         isFloatingScalar(op->getOperand(0).getType()));
+  }
+
   static bool containsConditionalOperator(emitc::ExpressionOp expression) {
     for (Operation &op : expression.getBody()->without_terminator()) {
       if (isa<emitc::ConditionalOp>(op)) {
@@ -69,7 +82,10 @@ struct FormEmitCExpressionsCompatPass final
       auto apply = dyn_cast<emitc::ApplyOp>(op);
       const bool isAddressOf =
           apply && apply.getApplicableOperator() == "&";
-      if (isAddressOf) {
+      // LLVM 19 prints emitc.cast with C-style cast precedence. Inlining an
+      // arithmetic expression into its operand would cast only its first
+      // term, changing both type and rounding (and failing CCEC FP->unsigned).
+      if (isAddressOf || isFloatingCast(&op)) {
         continue;
       }
 
@@ -116,7 +132,13 @@ struct FormEmitCExpressionsCompatPass final
           !op->getParentOfType<emitc::ExpressionOp>() &&
           op->getNumResults() == 1;
       if (isTopLevelSingleResultExpression) {
-        emitc::createExpression(op, builder);
+        auto expression = emitc::createExpression(op, builder);
+        // Each strict floating SSA operation has its own rounding boundary.
+        // Keep these statements separate so C++ contraction cannot turn a
+        // compensated multiply/subtract into an FMA. Casts also must remain
+        // named values when consumed by other expression trees.
+        if (isFloatingScalar(op->getResult(0).getType()) || isFloatingCast(op))
+          expression.setDoNotInline(true);
       }
     });
 
