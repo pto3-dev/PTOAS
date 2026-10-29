@@ -475,16 +475,27 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 return reject("A1 accumulator subviews require two static offsets.");
             const int64_t row = constantInt(subview.getOffsets()[0]).value_or(-1);
             const int64_t col = constantInt(subview.getOffsets()[1]).value_or(-1);
-            // A complete N16 column of an NZ accumulator is one contiguous
-            // L0C span. Keep all rows, require an aligned static panel, and
-            // keep the parent allocation visible to synchronization.
-            if (!subview.getSource().getDefiningOp<AllocTileOp>() ||
-                !srcSpace || srcSpace.getAddressSpace() != AddressSpace::ACC ||
-                !dstSpace || dstSpace.getAddressSpace() != AddressSpace::ACC ||
-                src.getShape()[0] != dst.getShape()[0] || dst.getShape()[1] != 16 ||
-                row != 0 || col < 0 || col % 16 || col > src.getShape()[1] - 16 ||
-                subview.getValidRow() || subview.getValidCol())
-                return reject("A1 accumulator subviews require one full-height aligned N16 column panel.");
+            // A full-width row interval of a contiguous Vec tile is a
+            // contiguous aligned UB span. Preserve the parent allocation for
+            // automatic synchronization and forbid nested or partial views.
+            const bool vecRows = srcSpace && dstSpace && srcSpace.getAddressSpace() == AddressSpace::VEC &&
+                                 dstSpace.getAddressSpace() == AddressSpace::VEC;
+            if (vecRows) {
+                if (!subview.getSource().getDefiningOp<AllocTileOp>() || src.getBLayoutValueI32() != 0 ||
+                    dst.getBLayoutValueI32() != 0 || src.getElementType() != dst.getElementType() ||
+                    src.getShape()[1] != dst.getShape()[1] || col != 0 || row < 0 ||
+                    row > src.getShape()[0] - dst.getShape()[0] || subview.getValidRow() || subview.getValidCol())
+                    return reject("A1 Vec subviews require a bounded full-width static row interval.");
+            } else {
+                // A complete N16 column of an NZ accumulator is contiguous.
+                if (!subview.getSource().getDefiningOp<AllocTileOp>() ||
+                    !srcSpace || srcSpace.getAddressSpace() != AddressSpace::ACC ||
+                    !dstSpace || dstSpace.getAddressSpace() != AddressSpace::ACC ||
+                    src.getShape()[0] != dst.getShape()[0] || dst.getShape()[1] != 16 ||
+                    row != 0 || col < 0 || col % 16 || col > src.getShape()[1] - 16 ||
+                    subview.getValidRow() || subview.getValidCol())
+                    return reject("A1 accumulator subviews require one full-height aligned N16 column panel.");
+            }
         }
         if (auto load = dyn_cast<TLoadOp>(op)) {
             if (load.getPadModeAttr() || load.getPadValue() || load.getLeftPaddingNum() || load.getRightPaddingNum() ||

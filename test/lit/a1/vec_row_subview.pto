@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_vec_row_subview(%out: !pto.ptr<f32>, %in: !pto.ptr<f32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %srcrows = arith.constant 15 : index
+    %rows = arith.constant 13 : index
+    %cols = arith.constant 80 : index
+    %iv = pto.make_tensor_view %in, shape = [%srcrows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %ov = pto.make_tensor_view %out, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %ip = pto.partition_view %iv, offsets = [%zero, %zero], sizes = [%srcrows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<15x80xf32>
+    %op = pto.partition_view %ov, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<13x80xf32>
+    %src = pto.alloc_tile : !pto.tile_buf<vec, 15x80xf32>
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 13x80xf32>
+    pto.tload ins(%ip : !pto.partition_tensor_view<15x80xf32>) outs(%src : !pto.tile_buf<vec, 15x80xf32>)
+    %mid = pto.subview %src[%one, %zero] sizes [13, 80] : !pto.tile_buf<vec, 15x80xf32> -> !pto.tile_buf<vec, 13x80xf32>
+    pto.tadd ins(%mid, %mid : !pto.tile_buf<vec, 13x80xf32>, !pto.tile_buf<vec, 13x80xf32>) outs(%dst : !pto.tile_buf<vec, 13x80xf32>)
+    pto.tload ins(%ip : !pto.partition_tensor_view<15x80xf32>) outs(%src : !pto.tile_buf<vec, 15x80xf32>)
+    pto.tadd ins(%mid, %mid : !pto.tile_buf<vec, 13x80xf32>, !pto.tile_buf<vec, 13x80xf32>) outs(%dst : !pto.tile_buf<vec, 13x80xf32>)
+    pto.tstore ins(%dst : !pto.tile_buf<vec, 13x80xf32>) outs(%op : !pto.partition_tensor_view<13x80xf32>)
+    return
+  }
+}
+// CHECK-LABEL: a1_vec_row_subview(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TADD(
+// CHECK: set_flag(PIPE_V, PIPE_MTE2,
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TADD(
+// CHECK: set_flag(PIPE_V, PIPE_MTE3,
+// CHECK: TSTORE(
