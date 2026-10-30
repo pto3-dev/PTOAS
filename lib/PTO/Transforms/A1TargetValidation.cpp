@@ -503,23 +503,32 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             // automatic synchronization and forbid nested or partial views.
             const bool vecRows = srcSpace && dstSpace && srcSpace.getAddressSpace() == AddressSpace::VEC &&
                                  dstSpace.getAddressSpace() == AddressSpace::VEC;
-            const bool matRows = srcSpace && dstSpace && srcSpace.getAddressSpace() == AddressSpace::MAT &&
+            const bool matView = srcSpace && dstSpace && srcSpace.getAddressSpace() == AddressSpace::MAT &&
                                  dstSpace.getAddressSpace() == AddressSpace::MAT;
-            if (matRows) {
+            if (matView) {
                 const auto rowFacts = offsetFacts(subview.getOffsets()[0]);
                 const auto colFacts = offsetFacts(subview.getOffsets()[1]);
+                const bool c16Rows = src.getShape()[1] == 16 && dst.getShape()[1] == 16 &&
+                    colFacts.lower == 0 && colFacts.upper == 0 && rowFacts.lower >= 0 &&
+                    rowFacts.multiple % 16 == 0 && rowFacts.upper <= src.getShape()[0] - dst.getShape()[0];
+                // Every aligned full-height NZ column span is physically
+                // contiguous. Its compact child keeps the parent's C16 stride,
+                // so existing address resolution rebases it without a copy.
+                // Partial-height multi-C16 views instead need inherited strides
+                // and must not be mistaken for compact matrix operands.
+                const bool nzColumns = row == 0 && src.getShape()[0] == dst.getShape()[0] &&
+                    col >= 0 && col % 16 == 0 && col <= src.getShape()[1] - dst.getShape()[1] &&
+                    src.getCompactModeI32() == 0 && dst.getCompactModeI32() == 0;
                 if (!subview.getSource().getDefiningOp<AllocTileOp>() ||
                     !src.getElementType().isF16() || src.getElementType() != dst.getElementType() ||
-                    src.getShape()[1] != 16 || dst.getShape()[1] != 16 ||
                     src.getBLayoutValueI32() != static_cast<int32_t>(BLayout::ColMajor) ||
                     dst.getBLayoutValueI32() != static_cast<int32_t>(BLayout::ColMajor) ||
                     src.getSLayoutValueI32() != static_cast<int32_t>(SLayout::RowMajor) ||
                     dst.getSLayoutValueI32() != static_cast<int32_t>(SLayout::RowMajor) ||
                     src.getSFractalSizeI32() != 512 || dst.getSFractalSizeI32() != 512 ||
-                    colFacts.lower != 0 || colFacts.upper != 0 || rowFacts.lower < 0 || rowFacts.multiple % 16 ||
-                    rowFacts.upper > src.getShape()[0] - dst.getShape()[0] ||
-                    subview.getValidRow() || subview.getValidCol())
-                    return reject("A1 Mat subviews require a bounded aligned full-width C16 row interval.");
+                    (!c16Rows && !nzColumns) || subview.getValidRow() || subview.getValidCol())
+                    return reject("A1 Mat subviews require a bounded aligned full-width C16 row interval "
+                                  "or a full-height static aligned NZ column interval.");
             } else if (vecRows) {
                 if (!subview.getSource().getDefiningOp<AllocTileOp>() || src.getBLayoutValueI32() != 0 ||
                     dst.getBLayoutValueI32() != 0 || src.getElementType() != dst.getElementType() ||
