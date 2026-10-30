@@ -447,6 +447,13 @@ Binary arithmetic masks a final incomplete 256-byte repeat (128 FP16 or
 64 FP32 elements per complete repeat); DMA rows remain 32-byte aligned.
 Load/store, `TADD`, `TSUB`, `TMUL`, pointer/view construction, allocation, block
 indices, and local synchronization are enabled.
+Matching 32-bit integer ND buffers (`i32`, `si32`, `ui32`) are also supported
+for allocation, load/store and structural control flow. Rows retain the same
+32-byte alignment, full static shape, UB budget and bounded partition checks.
+Tensor and tile element types must match exactly. Integer arithmetic, scalar
+tile access, casts, Vec moves/subviews and packed-column or matrix integer
+storage remain rejected. This storage profile uses the matching A1 integer
+DMA implementation in PTO-ISA; it does not add gather or sorting instructions.
 `TMULS` also accepts a matching FP16/FP32 scalar and row-major Vec source/
 destination. Exact aliases are supported; known shifted overlaps are rejected.
 The native A1 implementation masks tails and batches at most 255 repeats per
