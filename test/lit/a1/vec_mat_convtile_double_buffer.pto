@@ -1,0 +1,64 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+
+// RUN: ptoas --pto-arch=a1 --pto-level=level3 %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_mat_convtile_alias(%out: !pto.ptr<f32>, %input: !pto.ptr<f16>, %weight: !pto.ptr<f16>) attributes {pto.entry} {
+    %addr0 = arith.constant 0 : i64
+    %addr1024 = arith.constant 1024 : i64
+    %addr512 = arith.constant 512 : i64
+    %c0 = arith.constant 0 : index
+    %c32 = arith.constant 32 : index
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %c288 = arith.constant 288 : index
+    %wv = pto.make_tensor_view %weight, shape = [%c288, %c16], strides = [%c16, %c1] : !pto.tensor_view<?x?xf16>
+    %wp = pto.partition_view %wv, offsets = [%c0, %c0], sizes = [%c288, %c16] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<288x16xf16>
+    %ov = pto.make_tensor_view %out, shape = [%c16, %c16], strides = [%c16, %c1] : !pto.tensor_view<?x?xf32>
+    %op = pto.partition_view %ov, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<16x16xf32>
+    %input2d = pto.make_tensor_view %input, shape = [%c16, %c32], strides = [%c32, %c1] : !pto.tensor_view<?x?xf16>
+    %input0 = pto.partition_view %input2d, offsets = [%c0, %c0], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %input1 = pto.partition_view %input2d, offsets = [%c0, %c16], sizes = [%c16, %c16] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %ub0 = pto.alloc_tile addr = %addr0 : !pto.tile_buf<vec, 16x16xf16>
+    %ub1 = pto.alloc_tile addr = %addr512 : !pto.tile_buf<vec, 16x16xf16>
+    %mat = pto.alloc_tile addr = %addr0 : !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %image = pto.alloc_tile addr = %addr0 {config = #image_config} : !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>
+    %weights = pto.alloc_tile addr = %addr1024 : !pto.tile_buf<mat, 288x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile addr = %addr0 : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>
+    %right = pto.alloc_tile addr = %addr0 : !pto.tile_buf<right, 288x16xf16, blayout=row_major, slayout=col_major, fractal=512>
+    %acc = pto.alloc_tile addr = %addr0 : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>
+    %result = pto.alloc_tile addr = %addr0 : !pto.tile_buf<vec, 16x16xf32>
+    pto.tload ins(%input0 : !pto.partition_tensor_view<16x16xf16>) outs(%ub0 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tload ins(%input1 : !pto.partition_tensor_view<16x16xf16>) outs(%ub1 : !pto.tile_buf<vec, 16x16xf16>)
+    pto.tinsert ins(%ub0, %c0, %c0 : !pto.tile_buf<vec, 16x16xf16>, index, index) outs(%mat : !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tinsert ins(%ub1, %c0, %c16 : !pto.tile_buf<vec, 16x16xf16>, index, index) outs(%mat : !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tload ins(%wp : !pto.partition_tensor_view<288x16xf16>) outs(%weights : !pto.tile_buf<mat, 288x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.timg2col %left, %image, pos_m = %c0, pos_k = %c0 {fmatrixMode = #pto.fmatrix_mode<a_auto>} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>
+    pto.tmov ins(%weights : !pto.tile_buf<mat, 288x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%right : !pto.tile_buf<right, 288x16xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    pto.tmatmul ins(%left, %right : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<right, 288x16xf16, blayout=row_major, slayout=col_major, fractal=512>) outs(%acc : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>)
+    pto.tmov ins(%acc : !pto.tile_buf<acc, 16x16xf32, blayout=col_major, slayout=row_major, fractal=1024>) outs(%result : !pto.tile_buf<vec, 16x16xf32>) {accToVecMode = #pto.acc_to_vec_mode<single_mode_vec0>}
+    pto.tstore ins(%result : !pto.tile_buf<vec, 16x16xf32>) outs(%op : !pto.partition_tensor_view<16x16xf32>)
+    return
+  }
+}
+
+// CHECK-LABEL: a1_mat_convtile_alias(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3, EVENT_ID[[LOAD0:[0-9]+]])
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3, EVENT_ID[[LOAD1:[0-9]+]])
+// CHECK: wait_flag(PIPE_MTE2, PIPE_MTE3, EVENT_ID[[LOAD0]])
+// CHECK: TINSERT(
+// CHECK: wait_flag(PIPE_MTE2, PIPE_MTE3, EVENT_ID[[LOAD1]])
+// CHECK: TINSERT(
+// CHECK: set_flag(PIPE_MTE3, PIPE_MTE1, EVENT_ID[[IMAGE:[0-9]+]])
+// CHECK: wait_flag(PIPE_MTE3, PIPE_MTE1, EVENT_ID[[IMAGE]])
+// CHECK: TIMG2COL<
+

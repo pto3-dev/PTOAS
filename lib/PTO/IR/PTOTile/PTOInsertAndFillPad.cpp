@@ -8,7 +8,8 @@
 
 // Included by PTO.cpp as part of the PTO IR implementation translation unit.
 
-// A1 has a coupled-core MTE1 panel copy, distinct from FIXPIPE inserts.
+// A1 panel insertion uses MTE1 for Mat-to-Left, MTE3 for Vec-to-Mat,
+// and V for Vec-to-Vec, distinct from FIXPIPE insertion.
 static LogicalResult verifyTInsertA1(TInsertOp op) {
   auto common = verifyTInsertCommon(op, /*allowLowPrecision=*/false);
   if (failed(common)) return failure();
@@ -18,8 +19,10 @@ static LogicalResult verifyTInsertA1(TInsertOp op) {
   const bool vecToVec = c.srcSpace && c.dstSpace && *c.srcSpace == pto::AddressSpace::VEC &&
                         *c.dstSpace == pto::AddressSpace::VEC && c.srcElem == c.dstElem &&
                         (c.srcElem.isF16() || c.srcElem.isF32());
-  if (!matToLeft && !vecToVec)
-    return op.emitOpError("A1 insertion requires FP16 Mat-to-Left or same-type FP16/FP32 Vec operands");
+  const bool vecToMat = c.srcSpace && c.dstSpace && *c.srcSpace == pto::AddressSpace::VEC &&
+                        *c.dstSpace == pto::AddressSpace::MAT && c.srcElem.isF16() && c.dstElem.isF16();
+  if (!matToLeft && !vecToVec && !vecToMat)
+    return op.emitOpError("A1 insertion requires FP16 Mat-to-Left, Vec-to-Mat, or same-type FP16/FP32 Vec operands");
   if (op.getFp() || op.getPreQuantScalar() || op.getAccToVecModeAttr() || op.getTinsertModeAttr() ||
       op.getReluPreMode() != pto::ReluPreMode::NoRelu)
     return op.emitOpError("A1 panel insertion does not support auxiliary operands or fused modes");
@@ -63,6 +66,9 @@ static LogicalResult verifyTInsertA1(TInsertOp op) {
   if (::mlir::pto::isTargetArchA1(getOperation()) && sOpt && dOpt &&
       *sOpt == ::mlir::pto::AddressSpace::MAT && *dOpt == ::mlir::pto::AddressSpace::LEFT)
     return ::mlir::pto::PIPE::PIPE_MTE1;
+  if (::mlir::pto::isTargetArchA1(getOperation()) && sOpt && dOpt &&
+      *sOpt == ::mlir::pto::AddressSpace::VEC && *dOpt == ::mlir::pto::AddressSpace::MAT)
+    return ::mlir::pto::PIPE::PIPE_MTE3;
   if (sOpt.has_value() && dOpt.has_value() &&
       sOpt.value() == ::mlir::pto::AddressSpace::VEC &&
       dOpt.value() == ::mlir::pto::AddressSpace::VEC)
