@@ -451,6 +451,11 @@ indices, and local synchronization are enabled.
 destination. Exact aliases are supported; known shifted overlaps are rejected.
 The native A1 implementation masks tails and batches at most 255 repeats per
 instruction; it also guards overlaps whose addresses are only known at runtime.
+DMA offset proofs also handle signed/unsigned integer division of a proven
+nonnegative value by a positive constant. Bounds use monotonic truncation;
+alignment survives only when that constant divides the proven input multiple.
+Negative/unknown dividends, zero/negative/unknown divisors and out-of-range or
+unaligned results retain fail-closed validation.
 Allocation valid-row/column operands that prove the complete static tile
 shape are normalized to static type dimensions, including PyPTO output.
 Unsupported types, layouts, operations, transfer modes and event ID 7 fail

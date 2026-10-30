@@ -89,6 +89,15 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
         const int64_t upper = std::min(a.upper, b.lower - 1);
         return {0, upper, upper == 0 ? 0U : 1U};
     }
+    // Nonnegative division by a proven positive constant is monotone, and
+    // signed truncation agrees with unsigned division on this domain. Keep
+    // alignment only when the divisor divides the proven input multiple.
+    if (isa<arith::DivSIOp, arith::DivUIOp>(op) && a.lower >= 0 && b.lower == b.upper && b.lower > 0) {
+        const int64_t lower = a.lower / b.lower, upper = a.upper / b.lower;
+        const uint64_t divisor = static_cast<uint64_t>(b.lower);
+        const uint64_t aligned = a.multiple % divisor == 0 ? a.multiple / divisor : 1;
+        return {lower, upper, upper == 0 ? 0U : aligned};
+    }
     if (isa<arith::MaxSIOp>(op))
         return {std::max(a.lower, b.lower), std::max(a.upper, b.upper), multiple};
     if (isa<arith::MinSIOp>(op))
