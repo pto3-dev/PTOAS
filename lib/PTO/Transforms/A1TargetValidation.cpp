@@ -461,6 +461,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, SubViewOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
+                TMulSOp,
                 TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
                 TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
@@ -591,6 +592,25 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 if (locationOf(operand) != AddressSpace::VEC ||
                     cast<TileBufType>(operand.getType()).getBLayoutValueI32() != 0)
                     return reject("A1 vector arithmetic requires row-major Vec operands.");
+        if (auto multiply = dyn_cast<TMulSOp>(op)) {
+            const Value src = multiply.getSrc0(), dst = multiply.getDst();
+            for (Value value : {src, dst})
+                if (locationOf(value) != AddressSpace::VEC ||
+                    cast<TileBufType>(value.getType()).getBLayoutValueI32() != 0)
+                    return reject("A1 scalar multiply requires row-major Vec operands.");
+            // A shifted destination may clobber a later source repeat. Known
+            // overlaps fail here; the native instruction guards runtime spans.
+            auto source = src.getDefiningOp<AllocTileOp>();
+            auto destination = dst.getDefiningOp<AllocTileOp>();
+            if (source && destination) {
+                const auto sp = constantInt(source.getAddr()), dp = constantInt(destination.getAddr());
+                const auto type = cast<TileBufType>(src.getType());
+                const int64_t bytes =
+                    type.getShape()[0] * type.getShape()[1] * vectorElementBytes(type.getElementType());
+                if (sp && dp && *sp != *dp && *sp < *dp + bytes && *dp < *sp + bytes)
+                    return reject("A1 scalar multiply requires disjoint storage or an exact alias.");
+            }
+        }
         if (isa<TRowExpandOp, TColExpandOp>(op)) {
             Value source = op->getOperand(0), destination = op->getOperand(1);
             auto src = cast<TileBufType>(source.getType());

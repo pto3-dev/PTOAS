@@ -447,6 +447,10 @@ Binary arithmetic masks a final incomplete 256-byte repeat (128 FP16 or
 64 FP32 elements per complete repeat); DMA rows remain 32-byte aligned.
 Load/store, `TADD`, `TSUB`, `TMUL`, pointer/view construction, allocation, block
 indices, and local synchronization are enabled.
+`TMULS` also accepts a matching FP16/FP32 scalar and row-major Vec source/
+destination. Exact aliases are supported; known shifted overlaps are rejected.
+The native A1 implementation masks tails and batches at most 255 repeats per
+instruction; it also guards overlaps whose addresses are only known at runtime.
 Allocation valid-row/column operands that prove the complete static tile
 shape are normalized to static type dimensions, including PyPTO output.
 Unsupported types, layouts, operations, transfer modes and event ID 7 fail
