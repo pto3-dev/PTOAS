@@ -528,3 +528,12 @@ A1 `pto.texpands` broadcasts an FP16/FP32 scalar into a full static ND Vec tile.
 A1 supports static FP16/FP32 `TROWSUM`, `TROWMAX`, `TCOLSUM` and `TCOLMAX`. Row results are aligned packed column-major Mx1 Vec buffers with full-size disjoint row-major scratch; matching contiguous Mx1 ND/DN views share their DMA path. Column sum supports only the sequential no-scratch form. Column results may reuse the exact first source row; partial overlaps, insufficient scratch and unaligned packed offsets are rejected before EmitC. Sum accumulation retains the input dtype; dynamic/unaligned tails and reduction-result broadcasts remain separate features.
 
 The A1 static FP16/FP32 Vec profile supports `pto.trowexpand` from packed column-major Mx1 results and `pto.tcolexpand` from row-major 1xN results into aligned row-major MxN tiles. Buffers must be disjoint, except a column source may share the exact first destination row. Dynamic shapes, partial overlaps and fused broadcast arithmetic remain unsupported.
+
+A1 `pto.subview` also supports a single-level, full-height column interval of
+an allocated FP16 NZ Mat tile. The static column offset and extent must be
+C16 aligned and bounded, with unchanged NZ/compact layout and full valid
+shape. The child shares L1 storage, keeps the parent's C16 stride and feeds
+N16/N32 Right operands without a reload or extraction copy. Existing C16
+row intervals retain their original contract; partial-height multi-C16,
+dynamic-column and unsupported-layout views remain rejected. CPU/offline
+checks do not establish hardware overlap or throughput.
