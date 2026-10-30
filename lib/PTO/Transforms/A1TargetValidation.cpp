@@ -83,7 +83,9 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
     auto a = offsetFacts(op->getOperand(0), depth + 1);
     auto b = offsetFacts(op->getOperand(1), depth + 1);
     const auto multiple = std::gcd(a.multiple, b.multiple);
-    if (isa<arith::RemSIOp>(op) && a.lower >= 0 && b.lower == b.upper && b.lower > 0) {
+    // Signed and unsigned remainder agree for proven nonnegative dividends
+    // and positive constant divisors; unknown or negative inputs stay rejected.
+    if (isa<arith::RemSIOp, arith::RemUIOp>(op) && a.lower >= 0 && b.lower == b.upper && b.lower > 0) {
         const int64_t upper = std::min(a.upper, b.lower - 1);
         return {0, upper, upper == 0 ? 0U : 1U};
     }
@@ -675,6 +677,19 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                     if (*srcAddr < *dstAddr + dstBytes && *dstAddr < *srcAddr + srcBytes)
                         return reject("A1 Vec insertion requires disjoint full row-major tiles and bounded aligned offsets.");
                 }
+            } else if (locationOf(insert.getSrc()) == AddressSpace::VEC &&
+                       locationOf(insert.getDst()) == AddressSpace::MAT) {
+                const auto colMajor = static_cast<int32_t>(BLayout::ColMajor);
+                const auto innerRow = static_cast<int32_t>(SLayout::RowMajor);
+                if (!source.getElementType().isF16() || !destination.getElementType().isF16() ||
+                    source.getBLayoutValueI32() != static_cast<int32_t>(BLayout::RowMajor) ||
+                    destination.getBLayoutValueI32() != colMajor || destination.getSLayoutValueI32() != innerRow ||
+                    source.getShape()[0] % 16 || source.getShape()[1] % 16 ||
+                    source.getShape()[0] > destination.getShape()[0] || source.getShape()[1] > destination.getShape()[1] ||
+                    row.lower < 0 || column.lower < 0 || row.multiple % 16 || column.multiple % 16 ||
+                    row.upper > destination.getShape()[0] - source.getShape()[0] ||
+                    column.upper > destination.getShape()[1] - source.getShape()[1])
+                    return reject("A1 Vec-to-Mat insertion requires bounded aligned FP16 ND to NZ panels.");
             } else {
                 if (locationOf(insert.getSrc()) != AddressSpace::MAT || locationOf(insert.getDst()) != AddressSpace::LEFT ||
                     source.getShape()[1] != 16 || !source.getElementType().isF16() || !destination.getElementType().isF16())

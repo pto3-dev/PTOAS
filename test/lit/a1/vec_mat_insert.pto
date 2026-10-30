@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_vec_mat_insert(%in: !pto.ptr<f16>, %initial: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %off = arith.constant 16 : index
+    %n32 = arith.constant 32 : index
+    %n64 = arith.constant 64 : index
+    %iv = pto.make_tensor_view %in, shape = [%n32, %n32], strides = [%n32, %one] : !pto.tensor_view<?x?xf16>
+    %mv = pto.make_tensor_view %initial, shape = [%n64, %n64], strides = [%n64, %one] : !pto.tensor_view<?x?xf16>
+    %ip = pto.partition_view %iv, offsets = [%zero, %zero], sizes = [%n32, %n32] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<32x32xf16>
+    %mp = pto.partition_view %mv, offsets = [%zero, %zero], sizes = [%n64, %n64] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<64x64xf16>
+    %src = pto.alloc_tile : !pto.tile_buf<vec, 32x32xf16>
+    %mat = pto.alloc_tile : !pto.tile_buf<mat, 64x64xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 64x64xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.tload ins(%ip : !pto.partition_tensor_view<32x32xf16>) outs(%src : !pto.tile_buf<vec, 32x32xf16>)
+    pto.tload ins(%mp : !pto.partition_tensor_view<64x64xf16>) outs(%mat : !pto.tile_buf<mat, 64x64xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tinsert ins(%src, %off, %off : !pto.tile_buf<vec, 32x32xf16>, index, index) outs(%mat : !pto.tile_buf<mat, 64x64xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tload ins(%ip : !pto.partition_tensor_view<32x32xf16>) outs(%src : !pto.tile_buf<vec, 32x32xf16>)
+    pto.tinsert ins(%src, %zero, %zero : !pto.tile_buf<vec, 32x32xf16>, index, index) outs(%mat : !pto.tile_buf<mat, 64x64xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    pto.tmov ins(%mat : !pto.tile_buf<mat, 64x64xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 64x64xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TINSERT(
+// CHECK: set_flag(PIPE_MTE3, PIPE_MTE2,
+// CHECK: TLOAD(
+// CHECK: TINSERT(
+// CHECK: set_flag(PIPE_MTE3, PIPE_MTE1,
+// CHECK: TMOV(
