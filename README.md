@@ -488,6 +488,16 @@ accumulator into a matching FP32 ND Vec tile before storing. Acc-to-Vec runs on
 `PIPE_V` on A1; A3/A5 retain FIX mapping. Larger K/N, partial rows, dual
 worker modes, fused activation and direct accumulator stores are rejected.
 
+A1 also accepts a full FP16 16x16 ZN Mat alias (`row_major`, `col_major`,
+512-byte fractals) only for allocation and the source of `pto.tmov` into Right.
+This view reuses an existing NZ Mat allocation for a transposed K panel; it
+adds no GM staging or transpose instruction. Larger tiles, partial valid
+shapes, other element types, Left destinations and direct loads into this
+layout remain rejected. Use the matching A1 ISA TMOV implementation. The
+`qk_transpose_view.pto` and `qk_row_reuse.pto` regressions cover two K16
+accumulation steps and the load/move synchronization needed for row reuse.
+CPU simulation does not validate the A1 hardware transfer mode or concurrency.
+
 A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
 `NONE` rounding and saturation `OFF`, without scratch. The allocator must place
 source/destination in disjoint buffers, except exact-alias FP32-to-FP16 narrowing.

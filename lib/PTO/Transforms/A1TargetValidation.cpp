@@ -254,10 +254,21 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
         const auto innerRow = static_cast<int32_t>(SLayout::RowMajor);
         const auto innerCol = static_cast<int32_t>(SLayout::ColMajor);
         bool supported = false;
-        if (location == AddressSpace::MAT)
-            supported = tile.getElementType().isF16() &&
-                        (tile.getBLayoutValueI32() == row || tile.getBLayoutValueI32() == col) &&
-                        tile.getSLayoutValueI32() == innerRow && tile.getSFractalSizeI32() == 512;
+        if (location == AddressSpace::MAT) {
+            const bool transposeView = tile.getElementType().isF16() && shape[0] == 16 && shape[1] == 16 &&
+                                       tile.getBLayoutValueI32() == row && tile.getSLayoutValueI32() == innerCol &&
+                                       tile.getSFractalSizeI32() == 512;
+            bool validTransposeUse = isa<AllocTileOp>(op);
+            if (auto move = dyn_cast<TMovOp>(op)) {
+                auto dst = dyn_cast<TileBufType>(move.getDst().getType());
+                auto dstSpace = dst ? dyn_cast_or_null<AddressSpaceAttr>(dst.getMemorySpace()) : AddressSpaceAttr();
+                validTransposeUse = move.getSrc().getType() == tile && dstSpace &&
+                                    dstSpace.getAddressSpace() == AddressSpace::RIGHT;
+            }
+            supported = tile.getElementType().isF16() && tile.getSFractalSizeI32() == 512 &&
+                        (((tile.getBLayoutValueI32() == row || tile.getBLayoutValueI32() == col) &&
+                          tile.getSLayoutValueI32() == innerRow) || (transposeView && validTransposeUse));
+        }
         if (location == AddressSpace::LEFT)
             supported = tile.getElementType().isF16() &&
                         (tile.getBLayoutValueI32() == row || tile.getBLayoutValueI32() == col) &&
