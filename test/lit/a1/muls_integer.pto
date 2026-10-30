@@ -17,4 +17,4 @@ module attributes {pto.target_arch = "a1"} {
   }
 }
 
-// CHECK: A1 vector lowering requires FP16 or FP32 Vec tiles.
+// CHECK: A1 integer Vec buffers support allocation, load/store and structural control flow only.

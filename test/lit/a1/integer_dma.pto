@@ -1,0 +1,89 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_i32_copy(%out: !pto.ptr<i32>, %lhs: !pto.ptr<i32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 8 : index
+    %cols = arith.constant 8 : index
+    %view_cols = arith.constant 24 : index
+    %src_stride = arith.constant 32 : index
+    %dst_stride = arith.constant 40 : index
+    %src_col = arith.constant 8 : index
+    %dst_col = arith.constant 16 : index
+    %lhs_view = pto.make_tensor_view %lhs, shape = [%rows, %view_cols], strides = [%src_stride, %one] : !pto.tensor_view<?x?xi32>
+    %out_view = pto.make_tensor_view %out, shape = [%rows, %view_cols], strides = [%dst_stride, %one] : !pto.tensor_view<?x?xi32>
+    %lhs_part = pto.partition_view %lhs_view, offsets = [%zero, %src_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<8x8xi32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %dst_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<8x8xi32>
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 8x8xi32>
+    pto.tload ins(%lhs_part : !pto.partition_tensor_view<8x8xi32>) outs(%a : !pto.tile_buf<vec, 8x8xi32>)
+    pto.tstore ins(%a : !pto.tile_buf<vec, 8x8xi32>) outs(%out_part : !pto.partition_tensor_view<8x8xi32>)
+    return
+  }
+  func.func @a1_si32_copy(%out: !pto.ptr<si32>, %lhs: !pto.ptr<si32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 8 : index
+    %cols = arith.constant 8 : index
+    %view_cols = arith.constant 24 : index
+    %src_stride = arith.constant 32 : index
+    %dst_stride = arith.constant 40 : index
+    %src_col = arith.constant 8 : index
+    %dst_col = arith.constant 16 : index
+    %lhs_view = pto.make_tensor_view %lhs, shape = [%rows, %view_cols], strides = [%src_stride, %one] : !pto.tensor_view<?x?xsi32>
+    %out_view = pto.make_tensor_view %out, shape = [%rows, %view_cols], strides = [%dst_stride, %one] : !pto.tensor_view<?x?xsi32>
+    %lhs_part = pto.partition_view %lhs_view, offsets = [%zero, %src_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xsi32> -> !pto.partition_tensor_view<8x8xsi32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %dst_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xsi32> -> !pto.partition_tensor_view<8x8xsi32>
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 8x8xsi32>
+    pto.tload ins(%lhs_part : !pto.partition_tensor_view<8x8xsi32>) outs(%a : !pto.tile_buf<vec, 8x8xsi32>)
+    pto.tstore ins(%a : !pto.tile_buf<vec, 8x8xsi32>) outs(%out_part : !pto.partition_tensor_view<8x8xsi32>)
+    return
+  }
+  func.func @a1_ui32_copy(%out: !pto.ptr<ui32>, %lhs: !pto.ptr<ui32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 8 : index
+    %cols = arith.constant 8 : index
+    %view_cols = arith.constant 24 : index
+    %src_stride = arith.constant 32 : index
+    %dst_stride = arith.constant 40 : index
+    %src_col = arith.constant 8 : index
+    %dst_col = arith.constant 16 : index
+    %lhs_view = pto.make_tensor_view %lhs, shape = [%rows, %view_cols], strides = [%src_stride, %one] : !pto.tensor_view<?x?xui32>
+    %out_view = pto.make_tensor_view %out, shape = [%rows, %view_cols], strides = [%dst_stride, %one] : !pto.tensor_view<?x?xui32>
+    %lhs_part = pto.partition_view %lhs_view, offsets = [%zero, %src_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xui32> -> !pto.partition_tensor_view<8x8xui32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %dst_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xui32> -> !pto.partition_tensor_view<8x8xui32>
+    %a = pto.alloc_tile : !pto.tile_buf<vec, 8x8xui32>
+    pto.tload ins(%lhs_part : !pto.partition_tensor_view<8x8xui32>) outs(%a : !pto.tile_buf<vec, 8x8xui32>)
+    pto.tstore ins(%a : !pto.tile_buf<vec, 8x8xui32>) outs(%out_part : !pto.partition_tensor_view<8x8xui32>)
+    return
+  }
+}
+
+// CHECK-LABEL: a1_i32_copy(
+// CHECK: Tile<TileType::Vec, int32_t, 8, 8,
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: wait_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK-LABEL: a1_si32_copy(
+// CHECK: Tile<TileType::Vec, int32_t, 8, 8,
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: wait_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK-LABEL: a1_ui32_copy(
+// CHECK: Tile<TileType::Vec, uint32_t, 8, 8,
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: wait_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TSTORE(

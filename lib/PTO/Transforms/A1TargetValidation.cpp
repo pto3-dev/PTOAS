@@ -8,6 +8,7 @@
 
 #include "PTO/Support/A1Target.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
@@ -241,6 +242,15 @@ LogicalResult validateImg2col(TImg2colOp op)
     return success();
 }
 
+// Integer tiles are raw DMA storage, not arithmetic operands. Only tested
+// structural containers may carry them between allocation, load and store;
+// casts, scalar access, moves and vector arithmetic keep their own profiles.
+bool acceptsIntegerStorage(Operation* op)
+{
+    return isa<AllocTileOp, TLoadOp, TStoreOp, SectionCubeOp, SectionVectorOp,
+               func::FuncOp, func::ReturnOp, scf::ForOp, scf::IfOp, scf::YieldOp>(op);
+}
+
 LogicalResult validateTile(Operation* op, TileBufType tile)
 {
     auto shape = tile.getShape();
@@ -312,9 +322,19 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
         }
         return success();
     }
+    const bool integerStorage = tile.getElementType().isInteger(32);
     if (!space || space.getAddressSpace() != AddressSpace::VEC ||
-        (!tile.getElementType().isF16() && !tile.getElementType().isF32()))
-        return op->emitError("A1 vector lowering requires FP16 or FP32 Vec tiles.");
+        (!tile.getElementType().isF16() && !tile.getElementType().isF32() && !integerStorage)) {
+        return op->emitError("A1 vector lowering requires FP16, FP32 or 32-bit integer Vec tiles.");
+    }
+    const bool unsupportedIntegerUse = integerStorage && !acceptsIntegerStorage(op);
+    if (unsupportedIntegerUse) {
+        return op->emitError("A1 integer Vec buffers support allocation, load/store and structural control flow only.");
+    }
+    const bool integerColumnStorage = integerStorage && tile.getBLayoutValueI32() != 0;
+    if (integerColumnStorage) {
+        return op->emitError("A1 integer DMA requires full row-major Vec storage.");
+    }
     const bool packedColumn = shape.size() == 2 && shape[1] == 1 && tile.getBLayoutValueI32() == 1;
     if (shape.size() != 2 || shape[0] <= 0 || shape[1] <= 0 || tile.getValidShape() != shape ||
         (!packedColumn && tile.getBLayoutValueI32() != 0) || tile.getSLayoutValueI32() != 0 ||
@@ -378,8 +398,15 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
 {
     auto tile = dyn_cast<TileBufType>(buffer.getType());
     auto partition = global.getDefiningOp<PartitionViewOp>();
-    if (!tile || !partition || partition.getSizes().size() != 2)
+    const bool invalidPartition = !tile || !partition || partition.getSizes().size() != 2;
+    if (invalidPartition) {
         return op->emitError("A1 DMA requires a two-dimensional partition matching its tile.");
+    }
+    const auto globalType = dyn_cast<PartitionTensorViewType>(global.getType());
+    const bool mismatchedTypes = !globalType || globalType.getElementType() != tile.getElementType();
+    if (mismatchedTypes) {
+        return op->emitError("A1 DMA requires matching tensor and tile element types.");
+    }
     auto rows = constantInt(partition.getSizes()[0]);
     auto cols = constantInt(partition.getSizes()[1]);
     if (partition.getOffsets().size() != 2)
@@ -417,8 +444,10 @@ LogicalResult validateType(Operation* op, Type type)
         element = tensor.getElementType();
     if (auto partition = dyn_cast<PartitionTensorViewType>(type))
         element = partition.getElementType();
-    if (element && !element.isF16() && !element.isF32())
-        return op->emitError("A1 vector lowering requires FP16 or FP32 tensor data.");
+    const bool unsupportedElement = element && !element.isF16() && !element.isF32() && !element.isInteger(32);
+    if (unsupportedElement) {
+        return op->emitError("A1 vector lowering requires FP16, FP32 or 32-bit integer tensor data.");
+    }
     return success();
 }
 } // namespace
