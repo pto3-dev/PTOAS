@@ -1,0 +1,42 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: ptoas --pto-arch=a1 --pto-level=level1 %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %s -o - | FileCheck %s
+// RUN: sed 's/pto.alloc_tile :/pto.alloc_tile addr = %base :/' %s > %t.level3.pto
+// RUN: ptoas --pto-arch=a1 --pto-level=level3 %t.level3.pto -o - | FileCheck %s
+// Automatic planning accepts complete 1 MiB and 960 KiB image tiles.
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_full_l1_auto(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %base = arith.constant 0 : i64
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 2048 : index
+    %cols = arith.constant 256 : index
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<2048x256xf16>
+    %image = pto.alloc_tile : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<2048x256xf16>) outs(%image : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+  func.func @a1_resident_band(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %base = arith.constant 0 : i64
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 1920 : index
+    %cols = arith.constant 256 : index
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<1920x256xf16>
+    %image = pto.alloc_tile : !pto.tile_buf<mat, 1920x256xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<1920x256xf16>) outs(%image : !pto.tile_buf<mat, 1920x256xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+// CHECK-LABEL: a1_full_l1_auto
+// CHECK: TLOAD(
+// CHECK-LABEL: a1_resident_band
+// CHECK: TLOAD(

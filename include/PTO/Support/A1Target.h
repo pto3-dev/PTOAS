@@ -14,13 +14,15 @@
 
 namespace mlir::pto {
 
-// These are conservative allocation budgets matching the A1 ISA profile,
-// rather than the larger physical UB/L1 capacities.
+// L1 uses the full 1 MiB reported by CANN Ascend310P platform configuration.
+// UB retains its conservative profile budget; this does not change other
+// targets or the existing alignment, lifetime and address-range checks.
 struct A1MemorySpec {
     uint64_t capacityBytes;
     uint64_t alignmentBytes;
 };
 inline constexpr uint64_t kA1UBCapacityBytes = 128 * 1024;
+inline constexpr uint64_t kA1L1CapacityBytes = 1024 * 1024;
 inline constexpr unsigned kA1ReservedEventId = 7;
 
 inline A1MemorySpec getA1MemorySpec(AddressSpace space)
@@ -29,7 +31,7 @@ inline A1MemorySpec getA1MemorySpec(AddressSpace space)
         case AddressSpace::VEC:
             return {kA1UBCapacityBytes, 32};
         case AddressSpace::MAT:
-            return {512 * 1024, 512};
+            return {kA1L1CapacityBytes, 512};
         case AddressSpace::LEFT:
         case AddressSpace::RIGHT:
             return {64 * 1024, 512};
