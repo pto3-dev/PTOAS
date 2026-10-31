@@ -192,8 +192,12 @@ static LogicalResult verifyTGatherIndexShapes(TGatherOp op, bool allowA5ElemType
     if (tmpElem != idxElem) {
       return op.emitOpError("expects tmp and indices to have the same element type");
     }
-    if (failed(verifyTileBufSameValidShape(op, idxTy, op.getTmp().getType(), "indices", "tmp"))) {
-      return failure();
+    // A1 expands each 32-bit value into two 16-bit gather offsets. Its
+    // scratch capacity is validated by the A1 profile, not A2/A3's equal-shape
+    // contract; keep the existing dtype and row-major checks on both targets.
+    const bool sameTmpShapeRequired = !mlir::pto::isTargetArchA1(op.getOperation());
+    if (sameTmpShapeRequired) {
+      return verifyTileBufSameValidShape(op, idxTy, op.getTmp().getType(), "indices", "tmp");
     }
   }
   return success();

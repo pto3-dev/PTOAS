@@ -4763,7 +4763,9 @@ def TGatherOp : PTO_TOp<"tgather", [
   let description = [{
     Index and compare forms accept an optional temporary tile. Level1/level2
     supply omitted scratch tiles when needed. Level3 requires an explicit tmp
-    for compare forms and A2/A3 index forms. A5 index and mask-pattern forms
+    for compare forms and A1/A2/A3 index forms. A1 scratch stores one i32
+    byte offset per 16-bit value half; its static capacity may exceed the index
+    shape. A5 index and mask-pattern forms
     need no tmp.
   }];
 

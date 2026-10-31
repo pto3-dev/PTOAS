@@ -514,6 +514,21 @@ layout remain rejected. Use the matching A1 ISA TMOV implementation. The
 accumulation steps and the load/move synchronization needed for row reuse.
 CPU simulation does not validate the A1 hardware transfer mode or concurrency.
 
+A1 indexed `pto.tgather` reuses the four-tile public API for full static ND Vec
+FP16/FP32/INT32/UINT32 values and matching INT32/UINT32 indices and scratch.
+Indices are flat source element offsets. Scratch needs one 32-bit byte offset
+per 16-bit value half; FP32/integer values therefore need twice the destination
+element count. Level1/level2 supply omitted scratch with this target-specific
+capacity; level3 requires explicit scratch. The A1 ISA copies 32-bit values as
+two 16-bit halves, preserving raw bits. Known writable overlaps fail validation;
+the native implementation guards runtime aliases. Source/index shapes may
+differ, but destination/index shapes must match. Existing full-shape, row-major,
+alignment, UB and dtype checks remain in force; mask/compare forms are not yet
+implemented on A1. Synchronization models scalar index reads and vector value
+reads separately and reserves local helper event 7. CPU/offline tests are in
+`test/npu_validation/scripts/test_a1_indexed_gather_host.sh`; device accuracy,
+concurrency and performance still require hardware validation.
+
 A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
 `NONE` rounding and saturation `OFF`, without scratch. The allocator must place
 source/destination in disjoint buffers, except exact-alias FP32-to-FP16 narrowing.
