@@ -5010,6 +5010,15 @@ def TMrgSortOp: PTO_TOp<"tmrgsort", [
 ]> {
   let summary = "TMRGSORT: Merge sort (format1: ins(src, blockLen) outs(dst); format2: ins(2 to 4 srcs, tmp) outs(dst, executed)).";
 
+  let description = [{
+    A1 supports the multi-list form with full one-row FP32 Vec buffers,
+    16-pair-aligned sources and scratch covering two eight-field proposal banks.
+    Omitted scratch is materialized as eight times the total source columns
+    when memory planning runs; level3 requires explicit scratch. Exhausting
+    A1 merges preserve the initialized destination suffix and report the exact
+    copied counts through the existing vector<4xi16> carrier.
+  }];
+
   let arguments = (ins
     Variadic<PTODpsType>:$srcs,
     Optional<AnyInteger>:$blockLen,

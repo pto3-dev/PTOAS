@@ -189,7 +189,11 @@ void TMrgSortOp::getEffects(
     PTO_ADD_READ(effects, tmp[0]);
     PTO_ADD_WRITE(effects, tmp[0]);
   }
+  const bool preserveSuffix = mlir::pto::isTargetArchA1(getOperation()) && getExhausted();
   for (auto &opnd : getDstsMutable()) {
+    if (preserveSuffix) {
+      PTO_ADD_READ(effects, opnd);
+    }
     PTO_ADD_WRITE(effects, opnd);
   }
   auto executed = getExcutedMutable();

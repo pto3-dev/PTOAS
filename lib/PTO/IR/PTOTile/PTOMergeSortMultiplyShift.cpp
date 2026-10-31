@@ -164,7 +164,11 @@ static LogicalResult verifyTMrgSortFormat2Srcs(TMrgSortOp op) {
     if (srcValidShape[1] == mlir::ShapedType::kDynamic) {
       requiredTmpCols = mlir::ShapedType::kDynamic;
     } else if (requiredTmpCols != mlir::ShapedType::kDynamic) {
-      requiredTmpCols += srcValidShape[1];
+      int64_t updatedCols;
+      if (llvm::AddOverflow(requiredTmpCols, srcValidShape[1], updatedCols)) {
+        return op.emitOpError("format2 source column total is not representable");
+      }
+      requiredTmpCols = updatedCols;
     }
   }
   if (tmpTy && requiredTmpCols != mlir::ShapedType::kDynamic &&

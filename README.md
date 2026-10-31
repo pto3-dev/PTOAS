@@ -483,6 +483,19 @@ and S pair compaction, reserving and draining event 7 inside the ISA helper.
 NaN score ordering, FP16 sort, partial blocks and merge-sort remain outside
 this profile. CPU/offline compilation does not establish device performance.
 
+A1 `TMRGSORT` supports the existing 2–4-source form with full one-row FP32
+Vec tiles. Source widths are positive multiples of 32 elements (16 pairs),
+and destination width is at most their sum. Scratch requires eight times
+that sum in FP32 elements for two proposal banks; omitted scratch is planned
+with this target formula, while level3 requires an explicit operand. Known
+writable overlaps are rejected and read-only source aliases are allowed.
+The scheduler models S/V/S/V phases and preserves initialized output suffixes
+for `exhausted=true`. Exact consumed counts retain the existing
+`vector<4xi16>` / `MrgSortExecutedNumList` carrier. Use the matching A1 ISA
+merge implementation; blockLen format1, FP16 and source tails remain outside
+this profile. CPU and offline checks do not establish device accuracy or
+performance; proposal conversion and scalar compaction still need measurement.
+
 The current memory planner uses the A1 conservative budgets: UB 128 KiB, L1 512 KiB,
 L0A/L0B 64 KiB and L0C 256 KiB. Non-vector spaces remain unavailable to this
 first instruction profile. Event IDs 0–6 are compiler-owned; ID 7 is reserved

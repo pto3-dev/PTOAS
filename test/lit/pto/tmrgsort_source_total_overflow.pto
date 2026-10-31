@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --pto-arch=a3 --emit-pto-ir %s -o - 2>&1 | FileCheck %s
+module {
+  func.func @overflow(%source0: !pto.tile_buf<vec, 1x9223372036854775800xf32>, %source1: !pto.tile_buf<vec, 1x9223372036854775800xf32>, %result: !pto.tile_buf<vec, 1x64xf32>) {
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1 no_tmp {exhausted = false} : !pto.tile_buf<vec, 1x9223372036854775800xf32>, !pto.tile_buf<vec, 1x9223372036854775800xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+// CHECK: format2 source column total is not representable

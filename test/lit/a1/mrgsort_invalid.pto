@@ -1,0 +1,652 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/blocklen.pto -o - 2>&1 | FileCheck %s --check-prefix=BLOCK
+// BLOCK: A1 merge supports the multi-list form only
+// RUN: not ptoas --pto-arch=a1 %t/fp16.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE0
+// RUN: not ptoas --pto-arch=a1 %t/source_tail.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE1
+// RUN: not ptoas --pto-arch=a1 %t/source_rows.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE2
+// RUN: not ptoas --pto-arch=a1 %t/output_rows.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE3
+// RUN: not ptoas --pto-arch=a1 %t/output_too_wide.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE4
+// RUN: not ptoas --pto-arch=a1 %t/scratch_short.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE5
+// RUN: not ptoas --pto-arch=a1 %t/scratch_dtype.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE6
+// RUN: not ptoas --pto-arch=a1 %t/scratch_ub.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE7
+// RUN: not ptoas --pto-arch=a1 %t/source_total_ub.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE8
+// RUN: not ptoas --pto-arch=a1 %t/partial.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE9
+// RUN: not ptoas --pto-arch=a1 %t/status_type.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE10
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/level3_implicit.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE11
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_2_0.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE12
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_2_1.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE13
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_2_2.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE14
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_2_3.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE15
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_2_4.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE16
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3_0.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE17
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3_1.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE18
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3_2.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE19
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3_3.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE20
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3_4.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE21
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3_5.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE22
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3_6.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE23
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_0.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE24
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_1.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE25
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_2.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE26
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_3.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE27
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_4.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE28
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_5.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE29
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_6.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE30
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_7.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE31
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4_8.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE32
+
+// CASE0: A1 merge requires full one-row FP32 Vec buffers
+//--- fp16.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf16>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf16>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf16>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf16>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf16>, !pto.tile_buf<vec, 1x32xf16>, !pto.tile_buf<vec, 1x512xf16>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf16>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE1: A1 merge sources require complete 16-pair groups
+//--- source_tail.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x24xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x56xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x448xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x24xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x448xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x56xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE2: format2 expects src rows == 1
+//--- source_rows.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 2x32xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 2x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE3: format2 expects dst/tmp rows == 1
+//--- output_rows.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 2x32xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 2x32xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE4: A1 merge destination cannot exceed the total source width
+//--- output_too_wide.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x72xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x72xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE5: A1 merge scratch requires two eight-field proposal banks
+//--- scratch_short.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x504xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x504xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE6: format2 expects dst/tmp element types to match
+//--- scratch_dtype.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x1024xf16>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf16>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE7: 128 KiB UB budget
+//--- scratch_ub.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x32776xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32776xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE8: A1 merge proposal scratch exceeds the 128 KiB UB budget
+//--- source_total_ub.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x2080xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x2080xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1 no_tmp {exhausted = true} : !pto.tile_buf<vec, 1x2080xf32>, !pto.tile_buf<vec, 1x2080xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE9: A1 vector lowering requires static full row-major
+//--- partial.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=32, v_row=1, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=32, v_row=1, v_col=16, blayout=row_major, slayout=none_box, fractal=512, pad=0>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE10: format2 excuted must be vector<4xi16>
+//--- status_type.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %source1 = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi32>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi32>)
+    return
+  }
+}
+
+// CASE11: requires explicit tmp for tmrgsort format2 when PlanMemory is skipped
+//--- level3_implicit.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 16384 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1 no_tmp {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE12: A1 merge requires disjoint writable buffers
+//--- alias_2_0.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 32 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE13: A1 merge requires disjoint writable buffers
+//--- alias_2_1.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 8192 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE14: A1 merge requires disjoint writable buffers
+//--- alias_2_2.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    %scratch_addr = arith.constant 0 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE15: A1 merge requires disjoint writable buffers
+//--- alias_2_3.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    %scratch_addr = arith.constant 8192 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE16: A1 merge requires disjoint writable buffers
+//--- alias_2_4.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    %scratch_addr = arith.constant 65536 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x64xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE17: A1 merge requires disjoint writable buffers
+//--- alias_3_0.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 32 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x96xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE18: A1 merge requires disjoint writable buffers
+//--- alias_3_1.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 8192 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x96xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE19: A1 merge requires disjoint writable buffers
+//--- alias_3_2.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 16384 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x96xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE20: A1 merge requires disjoint writable buffers
+//--- alias_3_3.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x96xf32>
+    %scratch_addr = arith.constant 0 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE21: A1 merge requires disjoint writable buffers
+//--- alias_3_4.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x96xf32>
+    %scratch_addr = arith.constant 8192 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE22: A1 merge requires disjoint writable buffers
+//--- alias_3_5.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x96xf32>
+    %scratch_addr = arith.constant 16384 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE23: A1 merge requires disjoint writable buffers
+//--- alias_3_6.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x96xf32>
+    %scratch_addr = arith.constant 65536 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x768xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x768xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x96xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE24: A1 merge requires disjoint writable buffers
+//--- alias_4_0.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 32 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE25: A1 merge requires disjoint writable buffers
+//--- alias_4_1.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 8192 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE26: A1 merge requires disjoint writable buffers
+//--- alias_4_2.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 16384 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE27: A1 merge requires disjoint writable buffers
+//--- alias_4_3.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 24576 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 73728 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE28: A1 merge requires disjoint writable buffers
+//--- alias_4_4.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 0 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE29: A1 merge requires disjoint writable buffers
+//--- alias_4_5.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 8192 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE30: A1 merge requires disjoint writable buffers
+//--- alias_4_6.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 16384 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE31: A1 merge requires disjoint writable buffers
+//--- alias_4_7.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 24576 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+// CASE32: A1 merge requires disjoint writable buffers
+//--- alias_4_8.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source0_addr = arith.constant 0 : i64
+    %source0 = pto.alloc_tile addr = %source0_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source1_addr = arith.constant 8192 : i64
+    %source1 = pto.alloc_tile addr = %source1_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source2_addr = arith.constant 16384 : i64
+    %source2 = pto.alloc_tile addr = %source2_addr : !pto.tile_buf<vec, 1x32xf32>
+    %source3_addr = arith.constant 24576 : i64
+    %source3 = pto.alloc_tile addr = %source3_addr : !pto.tile_buf<vec, 1x32xf32>
+    %result_addr = arith.constant 65536 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x128xf32>
+    %scratch_addr = arith.constant 65536 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x1024xf32>
+    %counts = arith.constant dense<0> : vector<4xi16>
+    pto.tmrgsort ins(%source0, %source1, %source2, %source3, %scratch {exhausted = true} : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x1024xf32>) outs(%result, %counts : !pto.tile_buf<vec, 1x128xf32>, vector<4xi16>)
+    return
+  }
+}
+
+//--- blocklen.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x256xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x256xf32>
+    %width = arith.constant 64 : i32
+    pto.tmrgsort ins(%source, %width : !pto.tile_buf<vec, 1x256xf32>, i32) outs(%result : !pto.tile_buf<vec, 1x256xf32>)
+    return
+  }
+}
