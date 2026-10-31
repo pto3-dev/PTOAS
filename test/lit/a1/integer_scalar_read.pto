@@ -1,0 +1,59 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %s -o - | FileCheck %s
+// Raw integer words are read on S, first after DMA and then after mask selection.
+// Bitcast into FP32 is a storage-only oracle sink; integer Tile writes stay closed.
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_integer_scalar_read(%out: !pto.ptr<f32>, %input: !pto.ptr<i32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %two = arith.constant 2 : index
+    %source_cols = arith.constant 128 : index
+    %columns = arith.constant 64 : index
+    %in_view = pto.make_tensor_view %input, shape = [%one, %source_cols], strides = [%source_cols, %one] : !pto.tensor_view<?x?xi32>
+    %out_view = pto.make_tensor_view %out, shape = [%two, %columns], strides = [%columns, %one] : !pto.tensor_view<?x?xf32>
+    %in_part = pto.partition_view %in_view, offsets = [%zero, %zero], sizes = [%one, %source_cols] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<1x128xi32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%two, %columns] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<2x64xf32>
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x128xi32>
+    %selected = pto.alloc_tile : !pto.tile_buf<vec, 1x64xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 2x64xf32>
+    pto.tload ins(%in_part : !pto.partition_tensor_view<1x128xi32>) outs(%source : !pto.tile_buf<vec, 1x128xi32>)
+    scf.for %column = %zero to %columns step %one {
+      %even = arith.muli %column, %two : index
+      %odd = arith.addi %even, %one : index
+      %word = pto.tgetval ins(%source, %odd : !pto.tile_buf<vec, 1x128xi32>, index) outs : i32
+      %bits = arith.bitcast %word : i32 to f32
+      pto.tsetval ins(%column, %bits : index, f32) outs(%result : !pto.tile_buf<vec, 2x64xf32>)
+    }
+    pto.tgather ins(%source, {maskPattern = #pto.mask_pattern<P1010>} : !pto.tile_buf<vec, 1x128xi32>, "row") outs(%selected : !pto.tile_buf<vec, 1x64xi32>)
+    scf.for %column = %zero to %columns step %one {
+      %word = pto.tgetval ins(%selected, %column : !pto.tile_buf<vec, 1x64xi32>, index) outs : i32
+      %bits = arith.bitcast %word : i32 to f32
+      %offset = arith.addi %columns, %column : index
+      pto.tsetval ins(%offset, %bits : index, f32) outs(%result : !pto.tile_buf<vec, 2x64xf32>)
+    }
+    pto.tstore ins(%result : !pto.tile_buf<vec, 2x64xf32>) outs(%out_part : !pto.partition_tensor_view<2x64xf32>)
+    return
+  }
+}
+// CHECK: static AICORE inline To ptoas_bitcast
+// CHECK-LABEL: a1_integer_scalar_read(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_S,
+// CHECK: wait_flag(PIPE_MTE2, PIPE_S,
+// CHECK: int32_t {{.*}} = {{.*}}.GetValue(
+// CHECK: .SetValue(
+// CHECK: TGATHER<
+// CHECK: set_flag(PIPE_V, PIPE_S,
+// CHECK: wait_flag(PIPE_V, PIPE_S,
+// CHECK: int32_t {{.*}} = {{.*}}.GetValue(
+// CHECK: set_flag(PIPE_S, PIPE_MTE3,
+// CHECK: wait_flag(PIPE_S, PIPE_MTE3,
+// CHECK: TSTORE(

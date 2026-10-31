@@ -3243,7 +3243,9 @@ def TGetValOp : PTO_TOp<"tgetval", [
     Index:$offset
   );
 
-  let results = (outs ScalarType:$dst);
+  // Tile payloads may carry explicit signedness (e.g. ui32 sort indices).
+  // Preserve it here; the verifier still requires the exact source element type.
+  let results = (outs AnyTypeOf<[AnyInteger, AnyFloat], "integer/float tile scalar">:$dst);
 
   let hasVerifier = 1;
 
