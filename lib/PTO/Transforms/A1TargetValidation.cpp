@@ -245,10 +245,12 @@ LogicalResult validateImg2col(TImg2colOp op)
 
 // Integer tiles are raw DMA/gather/sort-index storage, not arithmetic operands. Only tested
 // structural containers and same-type reshape aliases may carry them between DMA operations;
-// casts, scalar access, moves and vector arithmetic keep their own profiles.
+// Scalar reads preserve typed payloads on S; writes, casts, moves and vector
+// arithmetic keep their own profiles.
 bool acceptsIntegerStorage(Operation* op)
 {
-    return isa<AllocTileOp, TLoadOp, TStoreOp, TGatherOp, TSort32Op, TReshapeOp, SectionCubeOp, SectionVectorOp,
+    return isa<AllocTileOp, TLoadOp, TStoreOp, TGatherOp, TSort32Op, TReshapeOp, TGetValOp,
+               SectionCubeOp, SectionVectorOp,
                func::FuncOp, func::ReturnOp, scf::ForOp, scf::IfOp, scf::YieldOp>(op);
 }
 
@@ -858,15 +860,18 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr{};
             return space ? std::optional<AddressSpace>(space.getAddressSpace()) : std::nullopt;
         };
-        // Scalar access uses the S pipe and the Tile getter/setter, not an
-        // FP16 vector conversion. Keep the initial profile to full FP32 UB
-        // tiles; packed reduction columns and matrix address spaces differ.
+        // The S-pipe getter preserves 32-bit integer payloads, including the
+        // high bits of sort indices. Integer setters remain outside this profile.
+        // FP16 conversion, packed reduction columns and matrix storage differ.
         if (isa<TGetValOp, TSetValOp>(op)) {
             Value tile = isa<TGetValOp>(op) ? cast<TGetValOp>(op).getSrc() : cast<TSetValOp>(op).getDst();
             auto type = dyn_cast<TileBufType>(tile.getType());
+            const bool integerRead = isa<TGetValOp>(op) && type && type.getElementType().isInteger(32);
             if (!type || locationOf(tile) != AddressSpace::VEC ||
-                !type.getElementType().isF32() || type.getBLayoutValueI32() != 0)
-                return reject("A1 scalar tile access requires a full row-major FP32 Vec tile.");
+                (!type.getElementType().isF32() && !integerRead) || type.getBLayoutValueI32() != 0) {
+                return reject("A1 scalar tile access requires a full row-major FP32 Vec tile. "
+                              "Reads additionally support INT32/UINT32 storage.");
+            }
         }
         if (auto reshape = dyn_cast<TReshapeOp>(op)) {
             auto source = cast<TileBufType>(reshape.getSrc().getType());

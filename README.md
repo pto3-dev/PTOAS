@@ -595,6 +595,15 @@ native-offline profiles are in
 `test/npu_validation/scripts/test_a1_mask_gather_host.sh`. Device correctness,
 asynchronous behavior and model timing require separate hardware acceptance.
 
+A1 scalar Tile reads (`pto.tgetval`) also accept full static row-major Vec
+INT32/UINT32 storage. The existing typed getter preserves all payload bits,
+including unsigned index high bits. DMA producers synchronize MTE2-to-S;
+vector mask extraction synchronizes V-to-S. Scalar bitcast helpers carry the
+AICORE annotation for native compilation. Offsets must be in bounds. Integer
+Tile writes and FP16 scalar access remain outside this profile; packed column
+and matrix storage keep their rejection checks. Generated-code CPU oracles and
+dav-m200 offline builds qualify these semantics separately from device timing.
+
 A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
 `NONE` rounding and saturation `OFF`, without scratch. The allocator must place
 source/destination in disjoint buffers, except exact-alias FP32-to-FP16 narrowing.

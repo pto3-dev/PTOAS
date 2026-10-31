@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/write.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=WRITE
+// RUN: not ptoas --pto-arch=a1 %t/column.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=COLUMN
+// RUN: not ptoas --pto-arch=a1 %t/wide.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=WIDE
+// WRITE: A1 integer Vec buffers support allocation, load/store and structural control flow only.
+// COLUMN: A1 integer DMA requires full row-major Vec storage.
+// WIDE: A1 vector lowering requires FP16, FP32 or 32-bit integer Vec tiles
+
+//--- write.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad() {
+    %zero = arith.constant 0 : index
+    %value = arith.constant 1 : i32
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x16xi32>
+    pto.tsetval ins(%zero, %value : index, i32) outs(%tile : !pto.tile_buf<vec, 1x16xi32>)
+    return
+  }
+}
+
+//--- column.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad() {
+    %zero = arith.constant 0 : index
+    %tile = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=i32, rows=16, cols=1, v_row=16, v_col=1, blayout=col_major, slayout=none_box, fractal=512, pad=0>
+    %word = pto.tgetval ins(%tile, %zero : !pto.tile_buf<loc=vec, dtype=i32, rows=16, cols=1, v_row=16, v_col=1, blayout=col_major, slayout=none_box, fractal=512, pad=0>, index) outs : i32
+    return
+  }
+}
+
+//--- wide.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad() {
+    %zero = arith.constant 0 : index
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x16xi64>
+    %word = pto.tgetval ins(%tile, %zero : !pto.tile_buf<vec, 1x16xi64>, index) outs : i64
+    return
+  }
+}
