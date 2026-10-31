@@ -450,6 +450,15 @@ indices, and local synchronization are enabled.
 Matching 32-bit integer ND buffers (`i32`, `si32`, `ui32`) are also supported
 for allocation, load/store and structural control flow. Rows retain the same
 32-byte alignment, full static shape, UB budget and bounded partition checks.
+Same-type `TRESHAPE` also carries INT32/UINT32 storage through full static
+row-major Vec aliases with identical element counts. Flattening, row regrouping
+and static identity views require no payload copy or extra scratch. DMA
+producer/consumer dependencies follow the shared storage through these aliases,
+including a reload through one view before storing through another. Signedness
+or FP32/integer reinterpretation remains unsupported. Use the matching ISA
+integer reshape helper; CPU/offline regressions are in
+`test/npu_validation/scripts/test_a1_integer_reshape_host.sh`.
+
 Tensor and tile element types must match exactly. Integer arithmetic, scalar
 tile access, casts, Vec moves/subviews and packed-column or matrix integer
 storage remain rejected. This storage profile uses the matching A1 integer
