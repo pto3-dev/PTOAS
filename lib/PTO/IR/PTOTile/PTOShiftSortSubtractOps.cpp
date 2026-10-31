@@ -51,7 +51,18 @@ mlir::LogicalResult mlir::pto::TSort32Op::verify() {
       failed(verifyVecTileCommon(*this, getTmp().getType(), "tmp"))) {
     return failure();
   }
-  if (getTmp() && getTargetArch(getOperation()) != PTOArch::A5) {
+  const bool isA1 = isTargetArchA1(getOperation());
+  if (isA1 && getTmp()) {
+    if (!getElemTy(getTmp().getType()).isF32()) {
+      return emitOpError("A1 tsort32 tmp requires FP32 elements");
+    }
+    constexpr int64_t minProposalBankBytes = 2048;
+    if (failed(verifyTmpCapacityAtLeast(*this, getTmp().getType(), minProposalBankBytes))) {
+      return failure();
+    }
+  }
+  const bool needsSourceSizedTmp = getTmp() && !isA1 && getTargetArch(getOperation()) != PTOArch::A5;
+  if (needsSourceSizedTmp) {
     auto requiredBytes = getStaticByteSize(srcTy);
     if (!requiredBytes) {
       return emitOpError(

@@ -242,12 +242,12 @@ LogicalResult validateImg2col(TImg2colOp op)
     return success();
 }
 
-// Integer tiles are raw DMA/gather storage, not arithmetic operands. Only tested
+// Integer tiles are raw DMA/gather/sort-index storage, not arithmetic operands. Only tested
 // structural containers may carry them between allocation, load and store;
 // casts, scalar access, moves and vector arithmetic keep their own profiles.
 bool acceptsIntegerStorage(Operation* op)
 {
-    return isa<AllocTileOp, TLoadOp, TStoreOp, TGatherOp, SectionCubeOp, SectionVectorOp,
+    return isa<AllocTileOp, TLoadOp, TStoreOp, TGatherOp, TSort32Op, SectionCubeOp, SectionVectorOp,
                func::FuncOp, func::ReturnOp, scf::ForOp, scf::IfOp, scf::YieldOp>(op);
 }
 
@@ -330,7 +330,7 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
     const bool unsupportedIntegerUse = integerStorage && !acceptsIntegerStorage(op);
     if (unsupportedIntegerUse) {
         return op->emitError("A1 integer Vec buffers support allocation, load/store and structural control flow only. "
-                             "Indexed gather also supports raw integer storage.");
+                             "Indexed gather and sort indices also support raw integer storage.");
     }
     const bool integerColumnStorage = integerStorage && tile.getBLayoutValueI32() != 0;
     if (integerColumnStorage) {
@@ -432,7 +432,7 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
     return success();
 }
 
-bool gatherBuffersOverlap(Value firstValue, Value secondValue)
+bool vectorBuffersOverlap(Value firstValue, Value secondValue)
 {
     if (firstValue == secondValue) {
         return true;
@@ -456,22 +456,17 @@ bool gatherBuffersOverlap(Value firstValue, Value secondValue)
     return a < b + secondBytes && b < a + firstBytes;
 }
 
-LogicalResult validateGatherAliases(TGatherOp op)
+LogicalResult validateWritableVectorAliases(Operation* op, ValueRange values, StringRef message)
 {
-    SmallVector<Value> values{op.getSrc(), op.getIndices(), op.getDst()};
-    const bool hasScratch = static_cast<bool>(op.getTmp());
-    if (hasScratch) {
-        values.push_back(op.getTmp());
-    }
-    // There are at most four operands, not an unbounded scan of the IR.
+    // The first two operands are read-only. Writable operands must not overlap
+    // either input or each other; unknown addresses retain the ISA runtime guard.
     for (unsigned i = 0; i < values.size(); ++i) {
         for (unsigned j = i + 1; j < values.size(); ++j) {
             if (i == 0 && j == 1) {
-                continue; // The two read-only inputs may share storage.
+                continue;
             }
-            const bool overlap = gatherBuffersOverlap(values[i], values[j]);
-            if (overlap) {
-                return op.emitError("A1 indexed gather requires disjoint writable buffers.");
+            if (vectorBuffersOverlap(values[i], values[j])) {
+                return op->emitError(message);
             }
         }
     }
@@ -515,7 +510,43 @@ LogicalResult validateGather(TGatherOp op)
             return op.emitError("A1 indexed gather scratch needs a matching 32-bit offset per 16-bit value half.");
         }
     }
-    return validateGatherAliases(op);
+    SmallVector<Value> values{op.getSrc(), op.getIndices(), op.getDst()};
+    if (hasScratch) {
+        values.push_back(op.getTmp());
+    }
+    return validateWritableVectorAliases(op, values, "A1 indexed gather requires disjoint writable buffers.");
+}
+
+LogicalResult validateSort32(TSort32Op op)
+{
+    for (Value value : op->getOperands()) {
+        auto tile = dyn_cast<TileBufType>(value.getType());
+        auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr();
+        const bool validVector = tile && space && space.getAddressSpace() == AddressSpace::VEC &&
+                                 tile.getBLayoutValueI32() == 0;
+        if (!validVector) {
+            return op.emitError("A1 sort32 requires full row-major Vec operands.");
+        }
+    }
+    auto source = cast<TileBufType>(op.getSrc().getType());
+    auto destination = cast<TileBufType>(op.getDst().getType());
+    auto indices = cast<TileBufType>(op.getIdx().getType());
+    const bool matchingTypes = source.getElementType().isF32() && destination.getElementType().isF32() &&
+                               indices.getElementType().isUnsignedInteger(32);
+    if (!matchingTypes) {
+        return op.emitError("A1 sort32 requires FP32 source/destination and UINT32 indices.");
+    }
+    const auto src = source.getShape(), dst = destination.getShape(), idx = indices.getShape();
+    if (src[1] % 32 || dst[0] != src[0] || dst[1] != 2 * src[1] || idx[1] != src[1] ||
+        (idx[0] != 1 && idx[0] != src[0])) {
+        return op.emitError(
+            "A1 sort32 requires 32-aligned values, expanded destination and matching/broadcast indices.");
+    }
+    SmallVector<Value> values{op.getSrc(), op.getIdx(), op.getDst()};
+    if (op.getTmp()) {
+        values.push_back(op.getTmp());
+    }
+    return validateWritableVectorAliases(op, values, "A1 sort32 requires disjoint writable buffers.");
 }
 
 LogicalResult validateType(Operation* op, Type type)
@@ -586,7 +617,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, SubViewOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TMulSOp, TGatherOp,
+                TMulSOp, TGatherOp, TSort32Op,
                 TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
                 TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
@@ -605,6 +636,10 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         auto gather = dyn_cast<TGatherOp>(op);
         const bool invalidGather = gather && failed(validateGather(gather));
         if (invalidGather) {
+            return WalkResult::interrupt();
+        }
+        auto sort = dyn_cast<TSort32Op>(op);
+        if (sort && failed(validateSort32(sort))) {
             return WalkResult::interrupt();
         }
         if (auto view = dyn_cast<MakeTensorViewOp>(op))

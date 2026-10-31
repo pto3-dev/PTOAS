@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --enable-insert-sync --pto-insert-sync-debug=2 %s -o - 2>&1 | FileCheck %s --check-prefix=MODEL
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_sort32(%output: !pto.ptr<f32>, %input: !pto.ptr<f32>, %positions: !pto.ptr<ui32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 8 : index
+    %cols = arith.constant 96 : index
+    %output_cols = arith.constant 192 : index
+    %input_stride = arith.constant 112 : index
+    %output_stride = arith.constant 224 : index
+    %source_col = arith.constant 16 : index
+    %index_col = arith.constant 8 : index
+    %input_view = pto.make_tensor_view %input, shape = [%rows, %input_stride], strides = [%input_stride, %one] : !pto.tensor_view<?x?xf32>
+    %index_view = pto.make_tensor_view %positions, shape = [%rows, %input_stride], strides = [%input_stride, %one] : !pto.tensor_view<?x?xui32>
+    %output_view = pto.make_tensor_view %output, shape = [%rows, %output_stride], strides = [%output_stride, %one] : !pto.tensor_view<?x?xf32>
+    %input_part = pto.partition_view %input_view, offsets = [%zero, %source_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<8x96xf32>
+    %index_part = pto.partition_view %index_view, offsets = [%zero, %index_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xui32> -> !pto.partition_tensor_view<8x96xui32>
+    %output_part = pto.partition_view %output_view, offsets = [%zero, %source_col], sizes = [%rows, %output_cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<8x192xf32>
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x192xf32>
+    pto.tload ins(%input_part : !pto.partition_tensor_view<8x96xf32>) outs(%source : !pto.tile_buf<vec, 8x96xf32>)
+    pto.tload ins(%index_part : !pto.partition_tensor_view<8x96xui32>) outs(%indices : !pto.tile_buf<vec, 8x96xui32>)
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x96xf32>, !pto.tile_buf<vec, 8x96xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 8x192xf32>)
+    pto.tstore ins(%result : !pto.tile_buf<vec, 8x192xf32>) outs(%output_part : !pto.partition_tensor_view<8x192xf32>)
+    return
+  }
+}
+// CHECK: a1_sort32(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: wait_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TSORT32(
+// CHECK: set_flag(PIPE_S, PIPE_MTE3,
+// CHECK: wait_flag(PIPE_S, PIPE_MTE3,
+// CHECK: TSTORE(
+// MODEL-LABEL: After Sync Motion
+// MODEL: COMPOUND pto.tsort32 [PIPE_V]
+// MODEL: COMPOUND pto.tsort32 [PIPE_S]
+// MODEL: COMPOUND pto.tsort32 [PIPE_V]

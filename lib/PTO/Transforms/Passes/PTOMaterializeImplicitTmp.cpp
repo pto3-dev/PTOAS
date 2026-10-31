@@ -567,11 +567,38 @@ static LogicalResult replaceTPowSWithTmp(pto::TPowSOp op,
   return success();
 }
 
+static LogicalResult replaceA1TSort32WithTmp(pto::TSort32Op op, bool requireExplicitTmp, MLIRContext *ctx) {
+  if (requireExplicitTmp) {
+    return op.emitOpError("A1 tsort32 requires explicit tmp when PlanMemory is skipped");
+  }
+  auto shape = getShapeVec(op.getSrc().getType());
+  const bool unsupportedShape = shape.size() != 2 || shape[0] <= 0 || shape[1] <= 0 || shape[1] % 32;
+  if (unsupportedShape) {
+    return op.emitOpError("A1 tsort32 requires static full 32-value blocks to materialize tmp");
+  }
+  // Each block needs two 32x8 proposal banks. Reuse across rows and cap
+  // batching at eight blocks (16 KiB), leaving UB room for other live tiles.
+  const int64_t blocks = std::min<int64_t>(shape[1] / 32, 8);
+  const int64_t words = blocks * 512;
+  auto type = makeVecTmpType(ctx, {1, words}, Float32Type::get(ctx), {1, words});
+  OpBuilder builder(op);
+  FailureOr<Value> tmp = createAllocTmp(builder, op.getLoc(), type);
+  if (failed(tmp)) {
+    return failure();
+  }
+  rebuildWithOperands(op.getOperation(), {op.getSrc(), op.getIdx(), *tmp, op.getDst()},
+                      ArrayRef<int32_t>{1, 1, 1, 1});
+  return success();
+}
+
 static LogicalResult replaceTSort32WithTmp(pto::TSort32Op op,
                                            bool requireExplicitTmp,
                                            MLIRContext *ctx) {
   if (op.getTmp()) {
     return success();
+  }
+  if (pto::isTargetArchA1(op.getOperation())) {
+    return replaceA1TSort32WithTmp(op, requireExplicitTmp, ctx);
   }
   auto valid = getValidShapeVec(op.getSrc().getType());
   if (valid.size() != mlir::pto::kValue2) {
