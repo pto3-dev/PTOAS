@@ -149,6 +149,20 @@ M/K 窗口必须能证明在范围内，K 按 16 对齐；编译器自动跟踪�
 不支持的布局、动态未知窗口和非默认 repeat 模式会被拒绝。
 
 
+`pto.timg2col` 也接受普通 FP16 NZ Mat 输入，形状为 `[height * width, channels]`，
+并在算子上提供 `config` 和 `fmatrixMode = #pto.fmatrix_mode<a_auto>`。
+两个维度必须在 `[16, 2048]` 内按 16 对齐，使用完整 valid shape、
+`col_major`/`row_major`、512 字节 fractal，Tile 的 pad/compact 模式均为 null。
+配置中的高度、宽度及通道数须与 Mat 形状一致；原有 filter、stride、dilation、
+padding、M/K 窗口边界及各存储空间容量检查继续生效，结果仍为 ZZ Left。
+
+该形式让内存规划及 MTE1 读依赖直接跟踪原 Mat SSA。原生 lowering 仅为已有指针
+创建 ConvTile 描述符，不增加图像分配、GM 搬运或布局复制。level1/level2 负责规划
+Mat 地址，level3 接受已规划的地址。原 ConvTile 输入仍从其分配读取配置，
+不允许在该形式的算子上再指定 config，以避免配置来源冲突。
+独立的 `test/npu_validation/scripts/test_a1_img2col_mat_host.sh` 覆盖三个 pipeline level
+的 CPU 逐位、完整 guard、输入只读及 `dav-m200` 离线编译；不证明设备并发或性能。
+
 ### A1 Vec 到 Mat 面板插入
 
 A1 `pto.tinsert` 支持将完整对齐的 FP16 ND Vec 面板插入 FP16 NZ Mat，

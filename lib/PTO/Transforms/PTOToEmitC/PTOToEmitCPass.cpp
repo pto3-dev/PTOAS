@@ -718,6 +718,10 @@ struct EmitPTOManualPass
       if (isa<mlir::pto::ConvTileBufType>(alloc.getResult().getType()))
         flags.convTileInit = true;
     }
+    if (auto im2col = dyn_cast<mlir::pto::TImg2colOp>(op)) {
+      const bool matSource = isa<mlir::pto::TileBufType>(im2col.getSrc().getType());
+      flags.convTileInit |= matSource;
+    }
     if (isa<arith::BitcastOp, arith::MaximumFOp, arith::MinimumFOp>(op))
       flags.bitcast = true;
   }

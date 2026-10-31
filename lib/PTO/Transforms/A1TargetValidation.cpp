@@ -234,13 +234,28 @@ LogicalResult validateConvTransfer(TLoadOp load, ConvTileBufType image)
 
 LogicalResult validateImg2col(TImg2colOp op)
 {
-    auto image = cast<ConvTileBufType>(op.getSrc().getType());
     auto left = cast<TileBufType>(op.getDst().getType());
-    auto alloc = op.getSrc().getDefiningOp<AllocTileOp>();
-    if (!alloc || !alloc.getConfig() || op.getFmatrixMode() != FmatrixMode::FMATRIX_A_AUTO)
-        return op.emitError("A1 im2col requires a directly allocated image with automatic FMATRIX A.");
-    const auto config = *alloc.getConfig();
-    const auto shape = image.getShape();
+    auto image = dyn_cast<ConvTileBufType>(op.getSrc().getType());
+    auto imageConfig = op.getConfig();
+    SmallVector<int64_t, 5> shape;
+    const bool automatic = op.getFmatrixMode() == FmatrixMode::FMATRIX_A_AUTO;
+    if (image) {
+        auto alloc = op.getSrc().getDefiningOp<AllocTileOp>();
+        const bool configured = alloc && alloc.getConfig().has_value();
+        if (!configured || !automatic) {
+            return op.emitError("A1 im2col requires a directly allocated image with automatic FMATRIX A.");
+        }
+        imageConfig = alloc.getConfig();
+        shape.assign(image.getShape().begin(), image.getShape().end());
+    } else {
+        if (!imageConfig || !automatic) {
+            return op.emitError("A1 Mat im2col requires config and automatic FMATRIX A.");
+        }
+        auto mat = cast<TileBufType>(op.getSrc().getType());
+        shape = {1, mat.getShape()[1] / 16, imageConfig->getFmapH().getInt(),
+                 imageConfig->getFmapW().getInt(), 16};
+    }
+    const auto config = *imageConfig;
     const int64_t fh = config.getFilterH().getInt(), fw = config.getFilterW().getInt();
     const int64_t dh = config.getDilationH().getInt(), dw = config.getDilationW().getInt();
     const int64_t sh = config.getStrideH().getInt(), sw = config.getStrideW().getInt();
