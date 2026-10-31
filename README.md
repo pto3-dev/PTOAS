@@ -518,7 +518,9 @@ The A1 memory planner uses the full 1 MiB L1 capacity reported by the CANN
 Ascend310P platform configuration. UB retains its conservative 128 KiB budget;
 L0A/L0B remain 64 KiB and L0C 256 KiB. Static and bounded dynamic Mat addresses
 must keep the complete allocation within L1, with 512-byte alignment. This
-also allows resident image bands larger than 512 KiB without changing other targets. Event IDs 0–6 are compiler-owned; ID 7 is reserved
+also allows resident image bands larger than 512 KiB without changing other targets. Unused automatic A1 tile handles are removed before placement, so a
+view's abandoned destination does not consume memory beside its parent.
+Assigned declarations and explicit `reserve_buffer` reservations are preserved. Event IDs 0–6 are compiler-owned; ID 7 is reserved
 for ISA helpers. Local set/wait synchronization runs by default on A1.
 The unified synchronization allocator remains unsupported on A1; use the
 validated local set/wait path or conservative barrier-all mode.
