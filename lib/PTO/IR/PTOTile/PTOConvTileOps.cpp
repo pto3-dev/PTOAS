@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Huawei Technologies Co., Ltd.
 // This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 // CANN Open Software License Agreement Version 2.0 (the "License").
-// Please refer to the License for details. Do not use this file except in compliance with the License.
-// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED,
-// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 
 // Included by PTO.cpp as part of the PTO IR implementation translation unit.
@@ -110,6 +110,80 @@ LogicalResult mlir::pto::SetImg2colPaddingOp::verify() {
   return verifySetFmatrixFamilyOp(*this);
 }
 
+// Both positions are independently optional. Two declarative optional groups
+// starting with a comma cannot distinguish a K-only position from an M one.
+static ParseResult parseImg2colPositions(
+    OpAsmParser &parser, std::optional<OpAsmParser::UnresolvedOperand> &m,
+    std::optional<OpAsmParser::UnresolvedOperand> &k) {
+  while (succeeded(parser.parseOptionalComma())) {
+    StringRef keyword;
+    if (parser.parseKeyword(&keyword)) {
+      return failure();
+    }
+    const bool isM = keyword == "pos_m";
+    if (!isM && keyword != "pos_k") {
+      return parser.emitError(parser.getCurrentLocation(), "expected 'pos_m' or 'pos_k'");
+    }
+    auto &position = isM ? m : k;
+    if (position) {
+      return parser.emitError(parser.getCurrentLocation()) << "duplicate " << keyword << " operand";
+    }
+    OpAsmParser::UnresolvedOperand operand;
+    if (parser.parseEqual()) {
+      return failure();
+    }
+    if (parser.parseOperand(operand)) {
+      return failure();
+    }
+    position = operand;
+  }
+  return success();
+}
+
+static void printImg2colPositions(OpAsmPrinter &printer, Operation *, Value m, Value k) {
+  if (m) {
+    printer << ", pos_m = " << m;
+  }
+  if (k) {
+    printer << ", pos_k = " << k;
+  }
+}
+
+// Full NZ Mat bytes are [C/16, H*W, 16], exactly one NC1HWC0 image.
+// Geometry belongs to the consuming op so the original Mat SSA retains its
+// lifetime and synchronization identity in every memory planner.
+static LogicalResult verifyTImg2colMatSource(TImg2colOp op) {
+  if (!pto::isTargetArchA1(op.getOperation())) {
+    return op.emitOpError("Mat image sources are supported only on A1");
+  }
+  auto source = cast<pto::TileBufType>(op.getSrc().getType());
+  if (failed(verifyTileBufCommon(op, source, "src", false))) {
+    return failure();
+  }
+  const auto shape = source.getShape();
+  const auto space = getPTOMemorySpaceEnum(source);
+  const bool alignedShape = shape.size() == 2 && llvm::all_of(shape, [](int64_t dim) {
+    return dim >= 16 && dim <= 2048 && dim % 16 == 0;
+  });
+  const bool nzLayout =
+      source.getBLayoutValueI32() == static_cast<int32_t>(pto::BLayout::ColMajor) &&
+      source.getSLayoutValueI32() == static_cast<int32_t>(pto::SLayout::RowMajor) &&
+      source.getSFractalSizeI32() == 512 && source.getCompactModeI32() == 0 && source.getPadValueI32() == 0;
+  const bool completeImage = space && *space == pto::AddressSpace::MAT && source.getElementType().isF16() &&
+                             alignedShape && source.getValidShape() == shape && nzLayout;
+  if (!completeImage) {
+    return op.emitOpError("Mat image requires a complete aligned FP16 NZ Mat tile");
+  }
+  const auto config = op.getConfig();
+  const bool matchingGeometry = config && config->getFmapH().getInt() > 0 && config->getFmapW().getInt() > 0 &&
+      config->getFmapH().getInt() * config->getFmapW().getInt() == shape[0] &&
+      config->getChannelSize().getInt() == shape[1];
+  if (!matchingGeometry) {
+    return op.emitOpError("Mat image config must match [height * width, channels]");
+  }
+  return success();
+}
+
 static LogicalResult verifyTImg2colSrcConvLayout(TImg2colOp op) {
   auto srcCT = dyn_cast<pto::ConvTileBufType>(op.getSrc().getType());
   if (!srcCT) {
@@ -193,15 +267,24 @@ LogicalResult mlir::pto::TImg2colOp::verify() {
                                  /*allowLowPrecision=*/true))) {
     return failure();
   }
-  if (failed(verifyConvTileCommon(*this, getSrc().getType(), "src",
-                                  /*allowLowPrecision=*/true))) {
-    return failure();
+  const bool matSource = isa<pto::TileBufType>(getSrc().getType());
+  if (matSource) {
+    if (failed(verifyTImg2colMatSource(*this))) {
+      return failure();
+    }
+  } else {
+    if (getConfig()) {
+      return emitOpError("ConvTile sources take config from their allocation");
+    }
+    if (failed(verifyConvTileCommon(*this, getSrc().getType(), "src", true))) {
+      return failure();
+    }
   }
   if (getElemTy(getDst().getType()) != getElemTy(getSrc().getType())) {
     return emitOpError() << "expects src and dst to have the same element type";
   }
   if (failed(verifyTImg2colElemType(*this)) ||
-      failed(verifyTImg2colSrcConvLayout(*this)) ||
+      (!matSource && failed(verifyTImg2colSrcConvLayout(*this))) ||
       failed(verifyTImg2colDstLayout(*this)) ||
       failed(verifyTImg2colFmatrixMode(*this))) {
     return failure();

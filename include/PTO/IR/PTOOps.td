@@ -1841,20 +1841,27 @@ def TImg2colOp : PTO_Op<"timg2col", [
     OpPipeInterface,
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
 ]> {
-  let summary = "Image-to-column transform from ConvTile to TileBuf";
+  let summary = "Image-to-column transform from ConvTile or an A1 NZ Mat image";
+  let description = [{
+    The legacy ConvTile source carries geometry on its allocation. On A1, a
+    complete FP16 NZ Mat tile may instead provide the same NC1HWC0 bytes with
+    an explicit config attribute. This form reads the original Mat allocation;
+    the native ConvTile descriptor aliases its pointer without another buffer.
+  }];
   let arguments = (ins
     TileBufType:$dst,
-    ConvTileBufType:$src,
+    AnyTypeOf<[ConvTileBufType, TileBufType], "ConvTile or Mat TileBuf">:$src,
     // Runtime row/column window offsets, SSA so a loop induction variable
     // can feed them (in-loop Split-K); absent means offset 0.
     Optional<Index>:$posM,
     Optional<Index>:$posK,
-    DefaultValuedAttr<PTO_FmatrixModeAttr, "::mlir::pto::FmatrixMode::FMATRIX_A_MANUAL">:$fmatrixMode
+    DefaultValuedAttr<PTO_FmatrixModeAttr, "::mlir::pto::FmatrixMode::FMATRIX_A_MANUAL">:$fmatrixMode,
+    OptionalAttr<ConvTileConfigAttr>:$config
   );
   let results = (outs);
   let hasVerifier = 1;
   let assemblyFormat = [{
-    $dst `,` $src (`,` `pos_m` `=` $posM^)? (`,` `pos_k` `=` $posK^)?
+    $dst `,` $src `` custom<Img2colPositions>($posM, $posK)
       attr-dict `:` qualified(type($dst)) `,` qualified(type($src))
   }];
 

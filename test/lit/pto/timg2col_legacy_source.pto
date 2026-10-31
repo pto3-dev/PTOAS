@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// Existing ConvTile source lowering must remain available on A3 and A5.
+// This verifies IR/types and code generation only; no kernel is executed.
+// RUN: split-file %s %t
+// RUN: ptoas --pto-arch=a3 --pto-level=level3 %t/a3.pto -o - | FileCheck %s --check-prefix=A3
+// RUN: ptoas --pto-arch=a5 --pto-level=level3 %t/a5.pto -o - | FileCheck %s --check-prefix=A5
+
+// A3-LABEL: legacy_img2col(
+// A3: ConvTile<
+// A3: PTOAS__INIT_CONVTILE_CONFIG(
+// A3: Tile<TileType::Left, half, 16, 288, BLayout::RowMajor
+// A3: TIMG2COL<
+// A5-LABEL: legacy_img2col(
+// A5: ConvTile<
+// A5: PTOAS__INIT_CONVTILE_CONFIG(
+// A5: Tile<TileType::Left, half, 16, 288, BLayout::ColMajor
+// A5: TIMG2COL<
+
+//--- a3.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a3"} {
+  func.func @legacy_img2col() attributes {pto.entry} {
+    %zero = arith.constant 0 : i64
+    %image = pto.alloc_tile addr = %zero {config = #image_config} : !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>
+    %left = pto.alloc_tile addr = %zero : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>
+    return
+  }
+}
+
+//--- a5.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a5"} {
+  func.func @legacy_img2col() attributes {pto.entry} {
+    %zero = arith.constant 0 : i64
+    %image = pto.alloc_tile addr = %zero {config = #image_config} : !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>
+    %left = pto.alloc_tile addr = %zero : !pto.tile_buf<left, 16x288xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>} : !pto.tile_buf<left, 16x288xf16, blayout=col_major, slayout=row_major, fractal=512>, !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>
+    return
+  }
+}

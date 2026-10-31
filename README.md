@@ -541,13 +541,14 @@ ptoas --pto-arch=a1 \
 A1 targets real Ascend 310P hardware. CPU simulation checks the numerical
 reference only and does not model 310P pipeline or memory behavior.
 
-The A1 matrix profile supports initialized FP16 multiplication with
-K=N=16 and aligned full M rows from 16 through 2048, producing FP32 output.
-Aligned ND inputs load into ZZ or NZ Mat tiles, moves prepare NZ Left and ZN
-Right operands, and an explicit `single_mode_vec0` move writes the FP32 NZ
-accumulator into a matching FP32 ND Vec tile before storing. Acc-to-Vec runs on
-`PIPE_V` on A1; A3/A5 retain FIX mapping. Larger K/N, partial rows, dual
-worker modes, fused activation and direct accumulator stores are rejected.
+The A1 matrix profile supports initialized FP16 multiplication with full,
+aligned M/K dimensions from 16 through 2048 and N16/N32, producing FP32
+output within each memory space's capacity. Aligned ND inputs load into ZZ
+or NZ Mat tiles; moves prepare ZZ Left (legacy NZ at K16) and ZN Right
+operands. An explicit `single_mode_vec0` move writes the FP32 NZ accumulator
+into a matching FP32 ND Vec tile before storing. Acc-to-Vec runs on `PIPE_V`
+on A1; A3/A5 retain FIX mapping. Partial valid shapes, dual worker modes,
+fused activation and direct accumulator stores remain rejected.
 
 A1 also accepts a full FP16 16x16 ZN Mat alias (`row_major`, `col_major`,
 512-byte fractals) only for allocation and the source of `pto.tmov` into Right.
@@ -558,6 +559,26 @@ layout remain rejected. Use the matching A1 ISA TMOV implementation. The
 `qk_transpose_view.pto` and `qk_row_reuse.pto` regressions cover two K16
 accumulation steps and the load/move synchronization needed for row reuse.
 CPU simulation does not validate the A1 hardware transfer mode or concurrency.
+
+A1 `pto.timg2col` accepts an ordinary FP16 NZ Mat source of shape
+`[height * width, channels]` with an explicit `config` attribute and
+`fmatrixMode = #pto.fmatrix_mode<a_auto>`. Both dimensions must be complete,
+16-aligned values in [16, 2048], with `col_major`/`row_major` layout,
+512-byte fractals, full valid shape and null tile pad/compact modes. Configuration must
+match the image height, width and channel count. Existing A1 filter, stride,
+dilation, padding, bounded M/K window and memory-budget checks still apply.
+The result is a ZZ Left tile for Cube computation.
+
+This form keeps the original Mat SSA value in memory planning and MTE1
+read effects. Native lowering creates a ConvTile descriptor over the Mat's
+existing pointer; it adds no image allocation, GM transfer or layout copy.
+Level1/level2 plan Mat addresses, while level3 accepts already-planned addresses.
+The legacy ConvTile source remains supported with configuration on its
+allocation; an operation-level config is rejected for that source form.
+See [the Mat-source regression](test/lit/a1/hardware_im2col_mat.pto).
+The driver-free `test/npu_validation/scripts/test_a1_img2col_mat_host.sh`
+checks guarded bitwise CPU results and `dav-m200` compilation across the three
+pipeline levels. These checks do not establish device concurrency or timing.
 
 A1 indexed `pto.tgather` reuses the four-tile public API for full static ND Vec
 FP16/FP32/INT32/UINT32 values and matching INT32/UINT32 indices and scratch.

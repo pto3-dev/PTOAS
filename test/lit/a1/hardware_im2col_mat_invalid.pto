@@ -1,0 +1,181 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/missing.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=MISSING
+// MISSING: Mat image config must match
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/geometry.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=GEOMETRY
+// GEOMETRY: Mat image config must match
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/channels.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=CHANNELS
+// CHANNELS: Mat image config must match
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/layout.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=LAYOUT
+// LAYOUT: Mat image requires a complete aligned FP16 NZ Mat tile
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/partial.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=PARTIAL
+// PARTIAL: Mat image requires a complete aligned FP16 NZ Mat tile
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/dtype.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=DTYPE
+// DTYPE: Mat image requires a complete aligned FP16 NZ Mat tile
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/space.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=SPACE
+// SPACE: Mat image requires a complete aligned FP16 NZ Mat tile
+// RUN: not ptoas --pto-arch=a3 --pto-level=level3 %t/arch.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=ARCH
+// ARCH: Mat image sources are supported only on A1
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/mode.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=MODE
+// MODE: A1 Mat im2col requires config and automatic FMATRIX A
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/mwindow.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=MWINDOW
+// MWINDOW: A1 im2col requires bounded M and aligned bounded K windows
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/kwindow.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=KWINDOW
+// KWINDOW: A1 im2col requires bounded M and aligned bounded K windows
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/kalign.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=KALIGN
+// KALIGN: A1 im2col requires bounded M and aligned bounded K windows
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/ambiguous.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=AMBIGUOUS
+// AMBIGUOUS: ConvTile sources take config from their allocation
+
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/duplicate_position.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=DUPLICATE
+// DUPLICATE: duplicate pos_k operand
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/unknown_position.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// UNKNOWN: expected 'pos_m' or 'pos_k'
+
+//--- missing.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- geometry.pto
+#image_config = #pto.conv_tile_config<fmap_h=3, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- channels.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=16, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- layout.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=row_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=row_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- partial.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<loc=mat, dtype=f16, rows=16, cols=32, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=512, pad=0>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<loc=mat, dtype=f16, rows=16, cols=32, v_row=16, v_col=16, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    return
+  }
+}
+
+//--- dtype.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf32, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf32, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- space.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<vec, 16x32xf16>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<vec, 16x32xf16>
+    return
+  }
+}
+
+//--- arch.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a3"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- mode.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<b_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- mwindow.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    %offset = arith.constant 65535 : index
+    pto.timg2col %left, %image, pos_m = %offset {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- kwindow.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    %offset = arith.constant 16 : index
+    pto.timg2col %left, %image, pos_k = %offset {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- kalign.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    %offset = arith.constant 1 : index
+    pto.timg2col %left, %image, pos_k = %offset {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- ambiguous.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    pto.timg2col %left, %image {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>
+    return
+  }
+}
+
+//--- duplicate_position.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    %offset = arith.constant 0 : index
+    pto.timg2col %left, %image, pos_k = %offset, pos_k = %offset {fmatrixMode = #pto.fmatrix_mode<a_auto>} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+
+//--- unknown_position.pto
+#image_config = #pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1, filter_h=3, filter_w=3, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=32, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%image: !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %left: !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    %offset = arith.constant 0 : index
+    pto.timg2col %left, %image, pos_x = %offset {fmatrixMode = #pto.fmatrix_mode<a_auto>} : !pto.tile_buf<left, 16x288xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
