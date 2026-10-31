@@ -469,6 +469,20 @@ Unsupported types, layouts, operations, transfer modes and event ID 7 fail
 compilation. Dynamic valid shapes, BF16, atomics, matrix operations, cross-core
 synchronization and persistent execution need separate backend features.
 
+A1 `TSORT32` reuses the existing three/four-operand IR and compact FP32
+value/UINT32-index pair layout. Source values must be full static row-major
+Vec blocks with 32-aligned columns; indices match the source or broadcast one
+row, and the destination has twice the source columns. Explicit scratch must
+be FP32 with at least 512 elements for two native proposal banks. When memory
+planning is enabled, omitted scratch batches up to eight blocks (at most
+16 KiB) and reuses those banks across rows. Level3 requires explicit scratch.
+Known writable overlaps are rejected; unknown pointers retain ISA guards.
+The matching ISA implementation uses native 16-proposal sort/merge followed
+by exact unsigned-index tie repair. The scheduler models both V proposal work
+and S pair compaction, reserving and draining event 7 inside the ISA helper.
+NaN score ordering, FP16 sort, partial blocks and merge-sort remain outside
+this profile. CPU/offline compilation does not establish device performance.
+
 The current memory planner uses the A1 conservative budgets: UB 128 KiB, L1 512 KiB,
 L0A/L0B 64 KiB and L0C 256 KiB. Non-vector spaces remain unavailable to this
 first instruction profile. Event IDs 0–6 are compiler-owned; ID 7 is reserved

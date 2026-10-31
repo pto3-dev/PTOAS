@@ -188,6 +188,22 @@ std::optional<SyncMacroModel> getTScatterSyncMacroModel(pto::TScatterOp op) {
   return model;
 }
 
+std::optional<SyncMacroModel> getTSort32SyncMacroModel(pto::TSort32Op op) {
+  const bool a1ExplicitSort = isTargetArchA1(op.getOperation()) && op.getTmp();
+  if (!a1ExplicitSort) {
+    return std::nullopt;
+  }
+  SyncMacroModel model;
+  // V stages/sorts proposals from both inputs. S compacts pairs and repairs
+  // index ties, then publishes to V. The helper drains reserved event 7.
+  addPhase(model, PipelineType::PIPE_V, ValueRange{op.getTmp()}, ValueRange{op.getSrc(), op.getIdx()});
+  addPhase(model, PipelineType::PIPE_S, ValueRange{op.getDst()}, ValueRange{op.getTmp()});
+  addPhase(model, PipelineType::PIPE_V, ValueRange{}, ValueRange{});
+  addBidirectionalHiddenEvent(model, PipelineType::PIPE_V, PipelineType::PIPE_S,
+                             ArrayRef<unsigned>{kA1ReservedEventId});
+  return model;
+}
+
 std::optional<SyncMacroModel> getTGatherSyncMacroModel(pto::TGatherOp op) {
   const bool a1Index = isTargetArchA1(op.getOperation()) && op.hasIndexForm() && op.getTmp();
   if (a1Index) {
@@ -455,6 +471,9 @@ std::optional<SyncMacroModel> mlir::pto::getSyncMacroModel(Operation *op) {
   }
   if (auto tscatter = dyn_cast<pto::TScatterOp>(op)) {
     return getTScatterSyncMacroModel(tscatter);
+  }
+  if (auto sort = dyn_cast<pto::TSort32Op>(op)) {
+    return getTSort32SyncMacroModel(sort);
   }
   if (auto tgather = dyn_cast<pto::TGatherOp>(op)) {
     return getTGatherSyncMacroModel(tgather);

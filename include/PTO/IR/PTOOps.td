@@ -6533,6 +6533,10 @@ def TSort32Op: PTO_TOp<"tsort32", [
     DPS form matching pto-isa overloads: (dst, src, idx) or (dst, src, idx, tmp).
     In PTO IR, `idx` is modeled as an input operand in `ins(...)`, while `dst`
     remains the sole DPS init/output buffer in `outs(...)`.
+    A1 supports full static row-major FP32 blocks with UINT32 indices and an
+    FP32 scratch tile of at least 512 elements. Indices may broadcast one row.
+    When PlanMemory runs, omitted scratch is materialized as two proposal banks
+    for up to eight blocks, reused across rows. Level3 requires explicit scratch.
   }];
 
   let arguments = (ins

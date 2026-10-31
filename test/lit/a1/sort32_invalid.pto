@@ -1,0 +1,288 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/value_dtype.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE0
+// RUN: not ptoas --pto-arch=a1 %t/signed_index.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE1
+// RUN: not ptoas --pto-arch=a1 %t/block_tail.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE2
+// RUN: not ptoas --pto-arch=a1 %t/dst_width.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE3
+// RUN: not ptoas --pto-arch=a1 %t/idx_width.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE4
+// RUN: not ptoas --pto-arch=a1 %t/idx_rows.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE5
+// RUN: not ptoas --pto-arch=a1 %t/scratch_dtype.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE6
+// RUN: not ptoas --pto-arch=a1 %t/scratch_capacity.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE7
+// RUN: not ptoas --pto-arch=a1 %t/column_major.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE8
+// RUN: not ptoas --pto-arch=a1 %t/partial.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE9
+// RUN: not ptoas --pto-arch=a1 %t/budget.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE10
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/level3_implicit.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE11
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_0.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE12
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_1.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE13
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_2.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE14
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_3.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE15
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/alias_4.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE16
+
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/shifted_alias.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE17
+
+// CASE0: A1 sort32 requires FP32 source/destination and UINT32 indices
+//--- value_dtype.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf16>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf16>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf16>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf16>)
+    return
+  }
+}
+
+// CASE1: A1 sort32 requires FP32 source/destination and UINT32 indices
+//--- signed_index.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x32xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xi32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE2: A1 sort32 requires 32-aligned values
+//--- block_tail.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x40xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x40xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x80xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x40xf32>, !pto.tile_buf<vec, 1x40xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x80xf32>)
+    return
+  }
+}
+
+// CASE3: A1 sort32 requires 32-aligned values
+//--- dst_width.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x72xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x72xf32>)
+    return
+  }
+}
+
+// CASE4: A1 sort32 requires 32-aligned values
+//--- idx_width.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x64xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x64xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE5: A1 sort32 requires 32-aligned values
+//--- idx_rows.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 3x32xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 2x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 3x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 3x32xf32>, !pto.tile_buf<vec, 2x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 3x64xf32>)
+    return
+  }
+}
+
+// CASE6: A1 tsort32 tmp requires FP32 elements
+//--- scratch_dtype.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x1024xf16>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x1024xf16>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE7: expects tmp capacity to be at least 2048 bytes
+//--- scratch_capacity.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x504xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x504xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE8: expects src to use the row_major blayout
+//--- column_major.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x32xf32, blayout=col_major>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x32xf32, blayout=col_major>, !pto.tile_buf<vec, 8x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 8x64xf32>)
+    return
+  }
+}
+
+// CASE9: A1 vector lowering requires static full row-major
+//--- partial.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=32, v_row=1, v_col=24, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=32, v_row=1, v_col=24, blayout=row_major, slayout=none_box, fractal=512, pad=0>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE10: 128 KiB UB budget
+//--- budget.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x32xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 1x32xui32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 1x32776xf32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x32776xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE11: A1 tsort32 requires explicit tmp when PlanMemory is skipped
+//--- level3_implicit.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_addr = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_addr : !pto.tile_buf<vec, 1x32xf32>
+    %indices_addr = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_addr : !pto.tile_buf<vec, 1x32xui32>
+    %result_addr = arith.constant 8192 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE12: A1 sort32 requires disjoint writable buffers
+//--- alias_0.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_addr = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_addr : !pto.tile_buf<vec, 1x32xf32>
+    %indices_addr = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_addr : !pto.tile_buf<vec, 1x32xui32>
+    %scratch_addr = arith.constant 16384 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %result_addr = arith.constant 0 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE13: A1 sort32 requires disjoint writable buffers
+//--- alias_1.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_addr = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_addr : !pto.tile_buf<vec, 1x32xf32>
+    %indices_addr = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_addr : !pto.tile_buf<vec, 1x32xui32>
+    %scratch_addr = arith.constant 16384 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %result_addr = arith.constant 4096 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE14: A1 sort32 requires disjoint writable buffers
+//--- alias_2.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_addr = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_addr : !pto.tile_buf<vec, 1x32xf32>
+    %indices_addr = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_addr : !pto.tile_buf<vec, 1x32xui32>
+    %scratch_addr = arith.constant 0 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %result_addr = arith.constant 8192 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE15: A1 sort32 requires disjoint writable buffers
+//--- alias_3.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_addr = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_addr : !pto.tile_buf<vec, 1x32xf32>
+    %indices_addr = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_addr : !pto.tile_buf<vec, 1x32xui32>
+    %scratch_addr = arith.constant 4096 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %result_addr = arith.constant 8192 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE16: A1 sort32 requires disjoint writable buffers
+//--- alias_4.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_addr = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_addr : !pto.tile_buf<vec, 1x32xf32>
+    %indices_addr = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_addr : !pto.tile_buf<vec, 1x32xui32>
+    %scratch_addr = arith.constant 8192 : i64
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %result_addr = arith.constant 8192 : i64
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
+
+// CASE17: A1 sort32 requires disjoint writable buffers.
+//--- shifted_alias.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_addr = arith.constant 0 : i64
+    %indices_addr = arith.constant 4096 : i64
+    %scratch_addr = arith.constant 16384 : i64
+    %result_addr = arith.constant 32 : i64
+    %source = pto.alloc_tile addr = %source_addr : !pto.tile_buf<vec, 1x32xf32>
+    %indices = pto.alloc_tile addr = %indices_addr : !pto.tile_buf<vec, 1x32xui32>
+    %scratch = pto.alloc_tile addr = %scratch_addr : !pto.tile_buf<vec, 1x512xf32>
+    %result = pto.alloc_tile addr = %result_addr : !pto.tile_buf<vec, 1x64xf32>
+    pto.tsort32 ins(%source, %indices, %scratch : !pto.tile_buf<vec, 1x32xf32>, !pto.tile_buf<vec, 1x32xui32>, !pto.tile_buf<vec, 1x512xf32>) outs(%result : !pto.tile_buf<vec, 1x64xf32>)
+    return
+  }
+}
