@@ -40,6 +40,25 @@ struct OffsetFacts {
     uint64_t multiple = 1;
 };
 
+// A1 index/i64 arithmetic is 64-bit. Zero-extending a narrower word defines
+// a nonnegative range even when its producer is an arbitrary raw Tile read.
+// Do not reuse producer alignment/ranges: narrower arithmetic may have wrapped.
+OffsetFacts zeroExtendedOffsetFacts(Value input, Type outputType)
+{
+    constexpr unsigned offsetBits = 64;
+    const auto integer = dyn_cast<IntegerType>(input.getType());
+    const bool wideDestination = outputType.isIndex() || outputType.isInteger(offsetBits);
+    if (!integer || !wideDestination) {
+        return {};
+    }
+    const unsigned width = integer.getWidth();
+    if (width >= offsetBits) {
+        return {};
+    }
+    const uint64_t maximum = APInt::getMaxValue(width).getZExtValue();
+    return {0, static_cast<int64_t>(maximum), 1};
+}
+
 OffsetFacts offsetFacts(Value value, unsigned depth = 0)
 {
     if (!value || depth > 32)
@@ -50,6 +69,12 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
         return {0, 7, 1};
     if (value.getDefiningOp<GetBlockNumOp>())
         return {1, 8, 1};
+    if (auto cast = value.getDefiningOp<arith::IndexCastUIOp>()) {
+        return zeroExtendedOffsetFacts(cast.getIn(), cast.getOut().getType());
+    }
+    if (auto extend = value.getDefiningOp<arith::ExtUIOp>()) {
+        return zeroExtendedOffsetFacts(extend.getIn(), extend.getOut().getType());
+    }
     if (auto cast = value.getDefiningOp<arith::IndexCastOp>()) {
         auto facts = offsetFacts(cast.getIn(), depth + 1);
         // A1 index and i64 use the same width. Narrower integer casts
