@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <numeric>
@@ -667,6 +668,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
 {
     if (!isTargetArchA1(module))
         return success();
+    llvm::DenseSet<Value> allocatedVectorAliases;
     WalkResult result = module.walk([&](Operation* op) -> WalkResult {
         auto reject = [&](StringRef message) {
             op->emitError(message);
@@ -698,6 +700,14 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 for (BlockArgument arg : block.getArguments())
                     if (failed(validateType(op, arg.getType())))
                         return WalkResult::interrupt();
+        if (auto alloc = dyn_cast<AllocTileOp>(op)) {
+            auto type = dyn_cast<TileBufType>(alloc.getResult().getType());
+            auto space = type ? dyn_cast_or_null<AddressSpaceAttr>(type.getMemorySpace()) : AddressSpaceAttr{};
+            const bool vectorAllocation = space && space.getAddressSpace() == AddressSpace::VEC;
+            if (vectorAllocation) {
+                allocatedVectorAliases.insert(alloc.getResult());
+            }
+        }
         auto gather = dyn_cast<TGatherOp>(op);
         const bool invalidGather = gather && failed(validateGather(gather));
         if (invalidGather) {
@@ -726,7 +736,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             const int64_t col = constantInt(subview.getOffsets()[1]).value_or(-1);
             // A full-width row interval of a contiguous Vec tile is a
             // contiguous aligned UB span. Preserve the parent allocation for
-            // automatic synchronization and forbid nested or partial views.
+            // automatic synchronization. Propagate only validated aliases so
+            // reshape/row-view chains remain bounded by one local allocation.
             const bool vecRows = srcSpace && dstSpace && srcSpace.getAddressSpace() == AddressSpace::VEC &&
                                  dstSpace.getAddressSpace() == AddressSpace::VEC;
             const bool matView = srcSpace && dstSpace && srcSpace.getAddressSpace() == AddressSpace::MAT &&
@@ -756,11 +767,15 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                     return reject("A1 Mat subviews require a bounded aligned full-width C16 row interval "
                                   "or a full-height static aligned NZ column interval.");
             } else if (vecRows) {
-                if (!subview.getSource().getDefiningOp<AllocTileOp>() || src.getBLayoutValueI32() != 0 ||
+                const bool invalidVectorRows =
+                    !allocatedVectorAliases.contains(subview.getSource()) || src.getBLayoutValueI32() != 0 ||
                     dst.getBLayoutValueI32() != 0 || src.getElementType() != dst.getElementType() ||
                     src.getShape()[1] != dst.getShape()[1] || col != 0 || row < 0 ||
-                    row > src.getShape()[0] - dst.getShape()[0] || subview.getValidRow() || subview.getValidCol())
+                    row > src.getShape()[0] - dst.getShape()[0] || subview.getValidRow() || subview.getValidCol();
+                if (invalidVectorRows) {
                     return reject("A1 Vec subviews require a bounded full-width static row interval.");
+                }
+                allocatedVectorAliases.insert(subview.getResult());
             } else {
                 // A complete N16 column of an NZ accumulator is contiguous.
                 if (!subview.getSource().getDefiningOp<AllocTileOp>() ||
@@ -830,6 +845,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 source.getShape()[0] * source.getShape()[1] !=
                     destination.getShape()[0] * destination.getShape()[1])
                 return reject("A1 reshape requires row-major Vec views with matching element types and counts.");
+            if (allocatedVectorAliases.contains(reshape.getSrc())) {
+                allocatedVectorAliases.insert(reshape.getResult());
+            }
         }
         if (isa<TAddOp, TSubOp, TMulOp, TDivOp, TExpOp, TMaxOp>(op))
             for (Value operand : op->getOperands())

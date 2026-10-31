@@ -214,6 +214,9 @@ static Value computeTileAddress(Value value, IRRewriter &rewriter,
   if (auto alloc = value.getDefiningOp<pto::AllocTileOp>()) {
     return ensureI64(alloc.getAddr(), rewriter, loc);
   }
+  if (auto reshape = value.getDefiningOp<pto::TReshapeOp>()) {
+    return computeTileAddress(reshape.getSrc(), rewriter, loc);
+  }
   if (value.getDefiningOp<pto::DeclareTileOp>()) {
     auto tileType = dyn_cast<pto::TileBufType>(value.getType());
     if (!tileType) {
