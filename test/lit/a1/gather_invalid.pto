@@ -241,18 +241,19 @@ module attributes {pto.target_arch = "a1"} {
   }
 }
 
-// CASE15: A1 gather supports the indexed form only.
+// Row masks are supported; the column-axis form remains fail-closed.
+// CASE15: A1 mask gather supports the row axis only.
 //--- mask.pto
 module attributes {pto.target_arch = "a1"} {
   func.func @mask() attributes {pto.entry} {
     %src = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
-    %dst = pto.alloc_tile : !pto.tile_buf<vec, 8x40xf32>
-    pto.tgather ins(%src, {maskPattern = #pto.mask_pattern<P0101>} : !pto.tile_buf<vec, 8x80xf32>, "row") outs(%dst : !pto.tile_buf<vec, 8x40xf32>)
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 4x80xf32>
+    pto.tgather ins(%src, {maskPattern = #pto.mask_pattern<P0101>} : !pto.tile_buf<vec, 8x80xf32>, "col") outs(%dst : !pto.tile_buf<vec, 4x80xf32>)
     return
   }
 }
 
-// CASE16: A1 gather supports the indexed form only.
+// CASE16: A1 gather supports indexed or fixed row-mask forms only.
 //--- compare.pto
 module attributes {pto.target_arch = "a1"} {
   func.func @compare() attributes {pto.entry} {

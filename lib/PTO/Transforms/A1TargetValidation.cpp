@@ -475,11 +475,44 @@ LogicalResult validateWritableVectorAliases(
     return success();
 }
 
+LogicalResult validateMaskGather(TGatherOp op)
+{
+    const bool rowAxis = op.getAxisAttr() && op.getAxisAttr().getValue() == "row";
+    if (!rowAxis) {
+        return op.emitError("A1 mask gather supports the row axis only.");
+    }
+    for (Value value : {op.getSrc(), op.getDst()}) {
+        auto tile = dyn_cast<TileBufType>(value.getType());
+        auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr{};
+        const bool vector = tile && space && space.getAddressSpace() == AddressSpace::VEC &&
+                            tile.getBLayoutValueI32() == 0;
+        if (!vector) {
+            return op.emitError("A1 mask gather requires full row-major Vec operands.");
+        }
+    }
+    auto source = cast<TileBufType>(op.getSrc().getType());
+    auto destination = cast<TileBufType>(op.getDst().getType());
+    const bool sameWidth = vectorElementBytes(source.getElementType()) ==
+                           vectorElementBytes(destination.getElementType());
+    if (!sameWidth) {
+        return op.emitError("A1 mask gather requires equal source and destination element widths.");
+    }
+    // Generic TGATHER verifies each mask's shape ratio; validateType above
+    // proves full static aligned shapes and the UB bound. Unlike indexed
+    // gather, this form has only one read-only input. Never exempt dst as a
+    // second read-only buffer when checking known aliases.
+    SmallVector<Value> values{op.getSrc(), op.getDst()};
+    return validateWritableVectorAliases(op, values, "A1 mask gather requires disjoint writable buffers.", 1);
+}
+
 LogicalResult validateGather(TGatherOp op)
 {
+    if (op.hasMaskForm()) {
+        return validateMaskGather(op);
+    }
     const bool indexedOnly = op.hasIndexForm() && !op.hasCompareForm() && !op.hasMaskForm() && !op.getAxisAttr();
     if (!indexedOnly) {
-        return op.emitError("A1 gather supports the indexed form only.");
+        return op.emitError("A1 gather supports indexed or fixed row-mask forms only.");
     }
     const ValueRange operands = op->getOperands();
     for (Value value : operands) {

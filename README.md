@@ -569,14 +569,31 @@ only the first destination-element-count byte offsets on V, and native 16/32-bit
 gather preserves raw bits. Known writable overlaps fail validation;
 the native implementation guards runtime aliases. Source/index shapes may
 differ, but destination/index shapes must match. Existing full-shape, row-major,
-alignment, UB and dtype checks remain in force; mask/compare forms are not yet
-implemented on A1. Synchronization models source/index reads and scratch/result
+alignment, UB and dtype checks remain in force; comparison forms remain
+unavailable on A1. Synchronization models source/index reads and scratch/result
 writes on V, with a final S publication phase and reserved bidirectional helper
 event 7. Scratch retains read/write effects to preserve its unused suffix. Use
 the vectorized gather ISA (commit 9bf9c269 or integrated aace5d1b); the older scalar
 offset implementation requires its older scheduling model. CPU/offline tests are in
 `test/npu_validation/scripts/test_a1_indexed_gather_host.sh`; device accuracy,
 concurrency and performance still require hardware validation.
+
+A1 fixed-mask `pto.tgather` reuses the existing two-tile form and shared emitter.
+All seven row patterns accept full static row-major Vec FP16/FP32/INT32/UINT32
+storage with equal source/destination element widths. Same-width cross-type
+output preserves payload bits, including FP32 pair storage to UINT32 indices.
+The existing IR verifier enforces the mask shape ratio; A1 retains full valid
+shapes, row alignment and UB limits. Known source/destination overlaps are
+rejected with one read-only operand; unknown aliases retain the ISA guard.
+Column-axis and comparison forms remain rejected.
+
+The matching ISA uses m200 VREDUCE for masks 1--6 and a shared raw-bit copy for
+P1111, without index/scratch storage or intermediate GM transfers. Synchronization
+uses the existing V-pipe model, so MTE2-to-V input publication and V-to-MTE3
+writeback apply without the indexed helper's final S phase. CPU/raw-bit and
+native-offline profiles are in
+`test/npu_validation/scripts/test_a1_mask_gather_host.sh`. Device correctness,
+asynchronous behavior and model timing require separate hardware acceptance.
 
 A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
 `NONE` rounding and saturation `OFF`, without scratch. The allocator must place

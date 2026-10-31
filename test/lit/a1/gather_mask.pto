@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %s -o - | FileCheck %s
+// One packed pair load feeds two exact fields, without an index/scratch bank.
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_mask_fields(%scores: !pto.ptr<f32>, %indices: !pto.ptr<ui32>, %pairs: !pto.ptr<f32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %count = arith.constant 608 : index
+    %selected = arith.constant 304 : index
+    %pv = pto.make_tensor_view %pairs, shape = [%one, %count], strides = [%count, %one] : !pto.tensor_view<?x?xf32>
+    %sv = pto.make_tensor_view %scores, shape = [%one, %selected], strides = [%selected, %one] : !pto.tensor_view<?x?xf32>
+    %iv = pto.make_tensor_view %indices, shape = [%one, %selected], strides = [%selected, %one] : !pto.tensor_view<?x?xui32>
+    %pp = pto.partition_view %pv, offsets = [%zero, %zero], sizes = [%one, %count] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x608xf32>
+    %sp = pto.partition_view %sv, offsets = [%zero, %zero], sizes = [%one, %selected] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x304xf32>
+    %ip = pto.partition_view %iv, offsets = [%zero, %zero], sizes = [%one, %selected] : !pto.tensor_view<?x?xui32> -> !pto.partition_tensor_view<1x304xui32>
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 1x608xf32>
+    %score = pto.alloc_tile : !pto.tile_buf<vec, 1x304xf32>
+    %index = pto.alloc_tile : !pto.tile_buf<vec, 1x304xui32>
+    pto.tload ins(%pp : !pto.partition_tensor_view<1x608xf32>) outs(%source : !pto.tile_buf<vec, 1x608xf32>)
+    pto.tgather ins(%source, {maskPattern = #pto.mask_pattern<P0101>} : !pto.tile_buf<vec, 1x608xf32>, "row") outs(%score : !pto.tile_buf<vec, 1x304xf32>)
+    pto.tgather ins(%source, {maskPattern = #pto.mask_pattern<P1010>} : !pto.tile_buf<vec, 1x608xf32>, "row") outs(%index : !pto.tile_buf<vec, 1x304xui32>)
+    pto.tstore ins(%score : !pto.tile_buf<vec, 1x304xf32>) outs(%sp : !pto.partition_tensor_view<1x304xf32>)
+    pto.tstore ins(%index : !pto.tile_buf<vec, 1x304xui32>) outs(%ip : !pto.partition_tensor_view<1x304xui32>)
+    return
+  }
+}
+// CHECK-LABEL: a1_mask_fields(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_V,
+// CHECK: wait_flag(PIPE_MTE2, PIPE_V,
+// CHECK: TGATHER<{{.*}}MaskPattern::P0101
+// CHECK: TGATHER<{{.*}}MaskPattern::P1010
+// CHECK: set_flag(PIPE_V, PIPE_MTE3,
+// CHECK: wait_flag(PIPE_V, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK: TSTORE(
