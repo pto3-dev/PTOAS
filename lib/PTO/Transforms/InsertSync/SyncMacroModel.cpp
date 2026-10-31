@@ -8,6 +8,7 @@
 
 #include "PTO/Transforms/InsertSync/SyncMacroModel.h"
 #include "PTO/Support/CodeConstants.h"
+#include "PTO/Support/A1Target.h"
 #include "PTO/IR/PTO.h"
 #include "mlir/IR/Matchers.h"
 
@@ -188,6 +189,21 @@ std::optional<SyncMacroModel> getTScatterSyncMacroModel(pto::TScatterOp op) {
 }
 
 std::optional<SyncMacroModel> getTGatherSyncMacroModel(pto::TGatherOp op) {
+  const bool a1Index = isTargetArchA1(op.getOperation()) && op.hasIndexForm() && op.getTmp();
+  if (a1Index) {
+    SyncMacroModel model;
+    // A1 reads indices on S to populate caller-owned byte-offset scratch,
+    // then gathers values on V. Model both DMA consumers independently;
+    // treating the entire instruction as V can race an MTE2 index producer.
+    addPhase(model, PipelineType::PIPE_S, ValueRange{op.getTmp()}, ValueRange{op.getIndices()});
+    addPhase(model, PipelineType::PIPE_V, ValueRange{op.getDst()}, ValueRange{op.getSrc(), op.getTmp()});
+    addPhase(model, PipelineType::PIPE_S, ValueRange{}, ValueRange{});
+    addHiddenEvent(model, PipelineType::PIPE_V, PipelineType::PIPE_S,
+                   ArrayRef<unsigned>{kA1ReservedEventId});
+    addHiddenEvent(model, PipelineType::PIPE_S, PipelineType::PIPE_V,
+                   ArrayRef<unsigned>{kA1ReservedEventId});
+    return model;
+  }
   if (!op.hasCompareForm() || getTargetArch(op.getOperation()) == PTOArch::A5) {
     return std::nullopt;
   }

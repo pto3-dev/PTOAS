@@ -323,6 +323,34 @@ static void rebuildTGatherWithTmp(pto::TGatherOp op, Value tmp) {
                                         op.getKValue() ? 1 : 0});
 }
 
+// A1 uses the existing explicit scratch operand as a uint32 byte-offset
+// table. A 32-bit value needs two adjacent 16-bit offsets, without changing
+// the public element-index convention or reserving hidden UB storage.
+static FailureOr<pto::TileBufType> makeTGatherIndexTmpType(pto::TGatherOp op, MLIRContext *ctx) {
+  const bool isA1 = pto::isTargetArchA1(op.getOperation());
+  if (!isA1) {
+    return makeSameShapeTmpType(ctx, op.getIndices());
+  }
+  auto indices = dyn_cast<pto::TileBufType>(op.getIndices().getType());
+  auto destination = dyn_cast<pto::TileBufType>(op.getDst().getType());
+  if (!indices || !destination) {
+    return failure();
+  }
+  auto shape = destination.getShape();
+  auto bytes = getElemBytes(destination.getElementType());
+  int64_t columns = 0;
+  const bool supportedShape = shape.size() == 2 && shape[0] > 0 && shape[1] > 0 && bytes &&
+                              (*bytes == 2 || *bytes == 4);
+  if (!supportedShape) {
+    return failure();
+  }
+  const bool overflow = llvm::MulOverflow(shape[1], *bytes / 2, columns);
+  if (overflow) {
+    return failure();
+  }
+  return makeVecTmpType(ctx, {shape[0], columns}, indices.getElementType(), {shape[0], columns});
+}
+
 static LogicalResult materializeTGatherTmp(pto::TGatherOp op, bool requireExplicitTmp, MLIRContext *ctx) {
   bool isA5 = pto::getTargetArch(op) == pto::PTOArch::A5;
   bool needsTmp = !op.getTmp() && !op.hasMaskForm() && !(isA5 && op.hasIndexForm());
@@ -333,7 +361,7 @@ static LogicalResult materializeTGatherTmp(pto::TGatherOp op, bool requireExplic
     return op.emitOpError("requires explicit tmp when PlanMemory is skipped");
   }
   FailureOr<pto::TileBufType> type =
-      op.hasIndexForm() ? makeSameShapeTmpType(ctx, op.getIndices())
+      op.hasIndexForm() ? makeTGatherIndexTmpType(op, ctx)
       : isA5 ? makeA5PlaceholderTmpType(ctx, op.getSrc())
              : makeTGatherCompareTmpType(op, ctx);
   if (failed(type)) {

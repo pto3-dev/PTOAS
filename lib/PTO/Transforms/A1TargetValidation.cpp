@@ -242,12 +242,12 @@ LogicalResult validateImg2col(TImg2colOp op)
     return success();
 }
 
-// Integer tiles are raw DMA storage, not arithmetic operands. Only tested
+// Integer tiles are raw DMA/gather storage, not arithmetic operands. Only tested
 // structural containers may carry them between allocation, load and store;
 // casts, scalar access, moves and vector arithmetic keep their own profiles.
 bool acceptsIntegerStorage(Operation* op)
 {
-    return isa<AllocTileOp, TLoadOp, TStoreOp, SectionCubeOp, SectionVectorOp,
+    return isa<AllocTileOp, TLoadOp, TStoreOp, TGatherOp, SectionCubeOp, SectionVectorOp,
                func::FuncOp, func::ReturnOp, scf::ForOp, scf::IfOp, scf::YieldOp>(op);
 }
 
@@ -329,7 +329,8 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
     }
     const bool unsupportedIntegerUse = integerStorage && !acceptsIntegerStorage(op);
     if (unsupportedIntegerUse) {
-        return op->emitError("A1 integer Vec buffers support allocation, load/store and structural control flow only.");
+        return op->emitError("A1 integer Vec buffers support allocation, load/store and structural control flow only. "
+                             "Indexed gather also supports raw integer storage.");
     }
     const bool integerColumnStorage = integerStorage && tile.getBLayoutValueI32() != 0;
     if (integerColumnStorage) {
@@ -431,6 +432,92 @@ LogicalResult validateTransfer(Operation* op, Value global, Value buffer)
     return success();
 }
 
+bool gatherBuffersOverlap(Value firstValue, Value secondValue)
+{
+    if (firstValue == secondValue) {
+        return true;
+    }
+    auto first = firstValue.getDefiningOp<AllocTileOp>();
+    auto second = secondValue.getDefiningOp<AllocTileOp>();
+    // Negative is a local unknown-address sentinel; valid UB addresses are
+    // nonnegative. Explicit values also avoid optional payload flow through
+    // the caller's inlined loop on the supported GCC toolchain.
+    const int64_t a = first ? constantInt(first.getAddr()).value_or(-1) : -1;
+    const int64_t b = second ? constantInt(second.getAddr()).value_or(-1) : -1;
+    if (a < 0 || b < 0) {
+        return false; // Runtime pointers and views retain the native guard.
+    }
+    auto firstType = cast<TileBufType>(firstValue.getType());
+    auto secondType = cast<TileBufType>(secondValue.getType());
+    const auto x = firstType.getShape(), y = secondType.getShape();
+    // All dimensions and addresses already passed the bounded UB checks.
+    const int64_t firstBytes = x[0] * x[1] * vectorElementBytes(firstType.getElementType());
+    const int64_t secondBytes = y[0] * y[1] * vectorElementBytes(secondType.getElementType());
+    return a < b + secondBytes && b < a + firstBytes;
+}
+
+LogicalResult validateGatherAliases(TGatherOp op)
+{
+    SmallVector<Value> values{op.getSrc(), op.getIndices(), op.getDst()};
+    const bool hasScratch = static_cast<bool>(op.getTmp());
+    if (hasScratch) {
+        values.push_back(op.getTmp());
+    }
+    // There are at most four operands, not an unbounded scan of the IR.
+    for (unsigned i = 0; i < values.size(); ++i) {
+        for (unsigned j = i + 1; j < values.size(); ++j) {
+            if (i == 0 && j == 1) {
+                continue; // The two read-only inputs may share storage.
+            }
+            const bool overlap = gatherBuffersOverlap(values[i], values[j]);
+            if (overlap) {
+                return op.emitError("A1 indexed gather requires disjoint writable buffers.");
+            }
+        }
+    }
+    return success();
+}
+
+LogicalResult validateGather(TGatherOp op)
+{
+    const bool indexedOnly = op.hasIndexForm() && !op.hasCompareForm() && !op.hasMaskForm() && !op.getAxisAttr();
+    if (!indexedOnly) {
+        return op.emitError("A1 gather supports the indexed form only.");
+    }
+    const ValueRange operands = op->getOperands();
+    for (Value value : operands) {
+        auto tile = dyn_cast<TileBufType>(value.getType());
+        auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr();
+        const bool contiguousVector = tile && space && space.getAddressSpace() == AddressSpace::VEC &&
+                                      tile.getBLayoutValueI32() == 0;
+        if (!contiguousVector) {
+            return op.emitError("A1 indexed gather requires full row-major Vec operands.");
+        }
+    }
+    auto source = cast<TileBufType>(op.getSrc().getType());
+    auto destination = cast<TileBufType>(op.getDst().getType());
+    auto indices = cast<TileBufType>(op.getIndices().getType());
+    const bool matchingTypesAndShape = source.getElementType() == destination.getElementType() &&
+        indices.getElementType().isInteger(32) && destination.getShape() == indices.getShape();
+    if (!matchingTypesAndShape) {
+        return op.emitError("A1 indexed gather requires matching value types and 32-bit destination-shaped indices.");
+    }
+    const bool hasScratch = static_cast<bool>(op.getTmp());
+    if (hasScratch) {
+        auto scratch = cast<TileBufType>(op.getTmp().getType());
+        const auto shape = destination.getShape(), tmpShape = scratch.getShape();
+        // validateTile already proved positive full shapes bounded by 128KiB;
+        // these products therefore cannot overflow and remain in UB units.
+        const int64_t required = shape[0] * shape[1] * (vectorElementBytes(source.getElementType()) / 2);
+        const bool validScratch = scratch.getElementType() == indices.getElementType() &&
+                                  tmpShape[0] * tmpShape[1] >= required;
+        if (!validScratch) {
+            return op.emitError("A1 indexed gather scratch needs a matching 32-bit offset per 16-bit value half.");
+        }
+    }
+    return validateGatherAliases(op);
+}
+
 LogicalResult validateType(Operation* op, Type type)
 {
     if (auto tile = dyn_cast<TileBufType>(type))
@@ -499,7 +586,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, SubViewOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TMulSOp,
+                TMulSOp, TGatherOp,
                 TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
                 TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
@@ -515,6 +602,11 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 for (BlockArgument arg : block.getArguments())
                     if (failed(validateType(op, arg.getType())))
                         return WalkResult::interrupt();
+        auto gather = dyn_cast<TGatherOp>(op);
+        const bool invalidGather = gather && failed(validateGather(gather));
+        if (invalidGather) {
+            return WalkResult::interrupt();
+        }
         if (auto view = dyn_cast<MakeTensorViewOp>(op))
             if (failed(validateView(view)))
                 return WalkResult::interrupt();

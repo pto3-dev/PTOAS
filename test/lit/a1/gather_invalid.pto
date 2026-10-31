@@ -1,0 +1,266 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_capacity.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE0
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_data_dtype.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE1
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_indices_dtype.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE2
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_layout.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE3
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_matrix.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE4
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_partial.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE5
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_scratch.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE6
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_scratch_dtype.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE7
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_shape.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE8
+// RUN: not ptoas --pto-arch=a1 %t/gather_invalid_value_dtype.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE9
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/gather_alias_0.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE10
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/gather_alias_1.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE11
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/gather_alias_2.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE12
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/gather_alias_3.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE13
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %t/gather_alias_4.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE14
+
+// RUN: not ptoas --pto-arch=a1 %t/mask.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE15
+// RUN: not ptoas --pto-arch=a1 %t/compare.pto -o - 2>&1 | FileCheck %s --check-prefix=CASE16
+
+// CASE0: 128 KiB UB budget
+//--- gather_invalid_capacity.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x32768xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x32768xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE1: A1 vector lowering requires FP16, FP32 or 32-bit integer
+//--- gather_invalid_data_dtype.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xi16>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi16>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xi16>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xi16>)
+    return
+  }
+}
+
+// CASE2: indices element type to be i32
+//--- gather_invalid_indices_dtype.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi16>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xi16>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi16>, !pto.tile_buf<vec, 8x192xi16>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE3: A1 vector lowering requires static full row-major
+//--- gather_invalid_layout.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32, blayout=col_major>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32, blayout=col_major>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE4: A1 indexed gather requires full row-major Vec
+//--- gather_invalid_matrix.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 16x16xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 16x16xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 16x16xf16>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>, !pto.tile_buf<vec, 16x16xi32>, !pto.tile_buf<vec, 16x16xi32>) outs(%result : !pto.tile_buf<vec, 16x16xf16>)
+    return
+  }
+}
+
+// CASE5: A1 vector lowering requires static full row-major
+//--- gather_invalid_partial.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=80, v_row=4, v_col=80, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<loc=vec, dtype=f32, rows=8, cols=80, v_row=4, v_col=80, blayout=row_major, slayout=none_box, fractal=512, pad=0>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE6: A1 indexed gather scratch needs
+//--- gather_invalid_scratch.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x96xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE7: tmp and indices to have the same element type
+//--- gather_invalid_scratch_dtype.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xui32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xui32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE8: dst and indices to have the same valid_shape
+//--- gather_invalid_shape.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 7x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 7x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE9: src and dst to have the same element type
+//--- gather_invalid_value_dtype.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf16>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf16>)
+    return
+  }
+}
+
+// CASE10: A1 indexed gather requires disjoint writable buffers.
+//--- gather_alias_0.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_address = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_address : !pto.tile_buf<vec, 8x80xf32>
+    %indices_address = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_address : !pto.tile_buf<vec, 8x96xi32>
+    %scratch_address = arith.constant 8192 : i64
+    %scratch = pto.alloc_tile addr = %scratch_address : !pto.tile_buf<vec, 8x192xi32>
+    %result_address = arith.constant 32 : i64
+    %result = pto.alloc_tile addr = %result_address : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE11: A1 indexed gather requires disjoint writable buffers.
+//--- gather_alias_1.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_address = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_address : !pto.tile_buf<vec, 8x80xf32>
+    %indices_address = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_address : !pto.tile_buf<vec, 8x96xi32>
+    %scratch_address = arith.constant 8192 : i64
+    %scratch = pto.alloc_tile addr = %scratch_address : !pto.tile_buf<vec, 8x192xi32>
+    %result_address = arith.constant 4128 : i64
+    %result = pto.alloc_tile addr = %result_address : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE12: A1 indexed gather requires disjoint writable buffers.
+//--- gather_alias_2.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_address = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_address : !pto.tile_buf<vec, 8x80xf32>
+    %indices_address = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_address : !pto.tile_buf<vec, 8x96xi32>
+    %scratch_address = arith.constant 32 : i64
+    %scratch = pto.alloc_tile addr = %scratch_address : !pto.tile_buf<vec, 8x192xi32>
+    %result_address = arith.constant 16384 : i64
+    %result = pto.alloc_tile addr = %result_address : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE13: A1 indexed gather requires disjoint writable buffers.
+//--- gather_alias_3.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_address = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_address : !pto.tile_buf<vec, 8x80xf32>
+    %indices_address = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_address : !pto.tile_buf<vec, 8x96xi32>
+    %scratch_address = arith.constant 4128 : i64
+    %scratch = pto.alloc_tile addr = %scratch_address : !pto.tile_buf<vec, 8x192xi32>
+    %result_address = arith.constant 16384 : i64
+    %result = pto.alloc_tile addr = %result_address : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE14: A1 indexed gather requires disjoint writable buffers.
+//--- gather_alias_4.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @probe() attributes {pto.entry} {
+    %source_address = arith.constant 0 : i64
+    %source = pto.alloc_tile addr = %source_address : !pto.tile_buf<vec, 8x80xf32>
+    %indices_address = arith.constant 4096 : i64
+    %indices = pto.alloc_tile addr = %indices_address : !pto.tile_buf<vec, 8x96xi32>
+    %scratch_address = arith.constant 16416 : i64
+    %scratch = pto.alloc_tile addr = %scratch_address : !pto.tile_buf<vec, 8x192xi32>
+    %result_address = arith.constant 16384 : i64
+    %result = pto.alloc_tile addr = %result_address : !pto.tile_buf<vec, 8x96xf32>
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    return
+  }
+}
+
+// CASE15: A1 gather supports the indexed form only.
+//--- mask.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @mask() attributes {pto.entry} {
+    %src = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 8x40xf32>
+    pto.tgather ins(%src, {maskPattern = #pto.mask_pattern<P0101>} : !pto.tile_buf<vec, 8x80xf32>, "row") outs(%dst : !pto.tile_buf<vec, 8x40xf32>)
+    return
+  }
+}
+
+// CASE16: A1 gather supports the indexed form only.
+//--- compare.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @compare() attributes {pto.entry} {
+    %key = arith.constant 0.0 : f32
+    %src = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %dst = pto.alloc_tile : !pto.tile_buf<vec, 8x80xi32>
+    %count = pto.alloc_tile : !pto.tile_buf<vec, 8x8xi32>
+    pto.tgather ins(%src, %key : !pto.tile_buf<vec, 8x80xf32>, f32) outs(%dst, %count : !pto.tile_buf<vec, 8x80xi32>, !pto.tile_buf<vec, 8x8xi32>)
+    return
+  }
+}
