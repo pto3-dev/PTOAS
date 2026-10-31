@@ -243,11 +243,11 @@ LogicalResult validateImg2col(TImg2colOp op)
 }
 
 // Integer tiles are raw DMA/gather/sort-index storage, not arithmetic operands. Only tested
-// structural containers may carry them between allocation, load and store;
+// structural containers and same-type reshape aliases may carry them between DMA operations;
 // casts, scalar access, moves and vector arithmetic keep their own profiles.
 bool acceptsIntegerStorage(Operation* op)
 {
-    return isa<AllocTileOp, TLoadOp, TStoreOp, TGatherOp, TSort32Op, SectionCubeOp, SectionVectorOp,
+    return isa<AllocTileOp, TLoadOp, TStoreOp, TGatherOp, TSort32Op, TReshapeOp, SectionCubeOp, SectionVectorOp,
                func::FuncOp, func::ReturnOp, scf::ForOp, scf::IfOp, scf::YieldOp>(op);
 }
 
