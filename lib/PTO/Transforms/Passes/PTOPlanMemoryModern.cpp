@@ -1868,6 +1868,27 @@ static LogicalResult verifyNoUnplannedAllocTile(func::FuncOp func) {
   return success();
 }
 
+// A1 view emitters can leave an unused automatic destination after binding
+// the result to pto.subview. It must not reserve storage alongside its live
+// parent. Assigned declarations and explicit reserve_buffer operations retain
+// their existing contracts; only unused addressless allocation handles die.
+static void eraseUnusedA1AutomaticTiles(func::FuncOp func) {
+  const auto targetArch = getTargetArch(func.getOperation());
+  if (targetArch != PTOArch::A1) {
+    return;
+  }
+  SmallVector<pto::AllocTileOp> unused;
+  func.walk([&unused](pto::AllocTileOp op) {
+    const bool unusedAutomatic = !op.getAddr() && op->use_empty();
+    if (unusedAutomatic) {
+      unused.push_back(op);
+    }
+  });
+  for (pto::AllocTileOp op : unused) {
+    op.erase();
+  }
+}
+
 static LogicalResult runModernPlanMemory(func::FuncOp func,
                                          llvm::StringRef memMode,
                                          bool orderBySize) {
@@ -1877,6 +1898,7 @@ static LogicalResult runModernPlanMemory(func::FuncOp func,
     return failure();
   }
 
+  eraseUnusedA1AutomaticTiles(func);
   PlannerAnalysis analysis(func);
   analysis.walkRegion(func.getBody());
   if (analysis.failed) {

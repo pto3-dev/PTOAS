@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: split-file %s %t
+// RUN: ptoas --pto-arch=a1 --pto-level=level1 %t/view.pto -o - | FileCheck %s --check-prefix=NATIVE
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %t/view.pto -o - | FileCheck %s --check-prefix=NATIVE
+// RUN: pto-test-opt %t/view.pto -pass-pipeline="builtin.module(pto-plan-memory)" | FileCheck %s --check-prefix=IR
+// RUN: pto-test-opt %t/assigned.pto -pass-pipeline="builtin.module(pto-plan-memory)" | FileCheck %s --check-prefix=ASSIGNED
+// RUN: not pto-test-opt %t/reserved.pto -pass-pipeline="builtin.module(pto-plan-memory)" -o /dev/null 2>&1 | FileCheck %s --check-prefix=RESERVED
+// IR-COUNT-2: pto.alloc_tile
+// IR-NOT: pto.alloc_tile
+// ASSIGNED: pto.alloc_tile addr =
+// RESERVED: failed to reserve a local memory hole
+// NATIVE: TLOAD(
+// NATIVE: TMOV(
+//--- view.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @resident_view(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 2048 : index
+    %cols = arith.constant 256 : index
+    %last = arith.constant 240 : index
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<2048x256xf16>
+    %image = pto.alloc_tile : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<2048x256xf16>) outs(%image : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    // A view emitter may have declared this destination before rebinding
+    // its result to the real subview. It has no SSA users and owns no data.
+    %placeholder = pto.alloc_tile : !pto.tile_buf<mat, 2048x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %view = pto.subview %image[%zero, %last] sizes [2048, 16] : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512> -> !pto.tile_buf<mat, 2048x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 2048x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.tmov ins(%view : !pto.tile_buf<mat, 2048x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 2048x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- assigned.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @assigned_declaration() {
+    %base = arith.constant 0 : i64
+    %decl = pto.alloc_tile addr = %base : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}
+
+//--- reserved.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @resident_view(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 2048 : index
+    %cols = arith.constant 256 : index
+    %last = arith.constant 240 : index
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<2048x256xf16>
+    %image = pto.alloc_tile : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<2048x256xf16>) outs(%image : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    %reserved = pto.reserve_buffer {name = "explicit_l1_hole", size = 512, location = #pto.address_space<mat>, auto = true} -> i32
+    // A view emitter may have declared this destination before rebinding
+    // its result to the real subview. It has no SSA users and owns no data.
+    %placeholder = pto.alloc_tile : !pto.tile_buf<mat, 2048x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %view = pto.subview %image[%zero, %last] sizes [2048, 16] : !pto.tile_buf<mat, 2048x256xf16, blayout=col_major, slayout=row_major, fractal=512> -> !pto.tile_buf<mat, 2048x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 2048x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.tmov ins(%view : !pto.tile_buf<mat, 2048x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 2048x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
