@@ -604,6 +604,18 @@ Tile writes and FP16 scalar access remain outside this profile; packed column
 and matrix storage keep their rejection checks. Generated-code CPU oracles and
 dav-m200 offline builds qualify these semantics separately from device timing.
 
+A1 DMA bounds analysis recognizes zero extension from narrower integer words
+into its 64-bit index/i64 address domain: `arith.index_castui` to index and
+`arith.extui` to i64 establish a nonnegative source-width range. A following
+signed or unsigned remainder by a positive constant can then bound selected-row
+loads without assuming that raw index values were already valid. Casting a raw
+32-bit word alone does not prove it fits a small view; source bounds, column
+alignment and overflow checks still apply. Unproven signed casts, unknown
+64-bit payloads and narrower arithmetic destinations retain conservative handling.
+No operator or signature changes. Driver-free raw-bit/guard and native-offline
+profiles are in `test/npu_validation/scripts/test_a1_bounded_integer_dma_host.sh`;
+device execution, model precision and timing require separate acceptance.
+
 A1 floating conversion supports full static ND Vec FP16/FP32 pairs with explicit
 `NONE` rounding and saturation `OFF`, without scratch. The allocator must place
 source/destination in disjoint buffers, except exact-alias FP32-to-FP16 narrowing.

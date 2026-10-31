@@ -1,0 +1,215 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/signed32.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/signed32.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 %t/wide64.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/wide64.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 %t/unbounded32.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=OUT
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/unbounded32.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=OUT
+// RUN: not ptoas --pto-arch=a1 %t/overflow.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/overflow.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 %t/one_past.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=OUT
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/one_past.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=OUT
+// RUN: not ptoas --pto-arch=a1 %t/unknown_divisor.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/unknown_divisor.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 %t/zero_divisor.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/zero_divisor.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 %t/unaligned.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/unaligned.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 %t/first_invalid_u8.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=OUT
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/first_invalid_u8.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=OUT
+// RUN: not ptoas --pto-arch=a1 %t/narrow_destination.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// RUN: not ptoas --pto-arch=a1 --pto-level=level2 %t/narrow_destination.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+// UNKNOWN: A1 DMA requires matching static tile sizes and nonnegative aligned partition offsets.
+// OUT: A1 DMA partition must fit within its source tensor view.
+
+//--- signed32.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 96 : index
+    %index = arith.index_cast %raw : i32 to index
+    %offset = arith.remsi %index, %rows : index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x96xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x96xf32>) outs(%tile : !pto.tile_buf<vec, 1x96xf32>)
+    return
+  }
+}
+
+//--- wide64.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 96 : index
+    %index = arith.index_castui %wide : i64 to index
+    %offset = arith.remsi %index, %rows : index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x96xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x96xf32>) outs(%tile : !pto.tile_buf<vec, 1x96xf32>)
+    return
+  }
+}
+
+//--- unbounded32.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 96 : index
+    %offset = arith.index_castui %raw : i32 to index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x96xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x96xf32>) outs(%tile : !pto.tile_buf<vec, 1x96xf32>)
+    return
+  }
+}
+
+//--- overflow.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 96 : index
+    %index = arith.index_castui %raw : i32 to index
+    %limit = arith.constant 9223372036854775807 : index
+    %sum = arith.addi %index, %limit : index
+    %offset = arith.remsi %sum, %rows : index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x96xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x96xf32>) outs(%tile : !pto.tile_buf<vec, 1x96xf32>)
+    return
+  }
+}
+
+//--- one_past.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 96 : index
+    %index = arith.index_castui %raw : i32 to index
+    %bounded = arith.remsi %index, %rows : index
+    %offset = arith.addi %bounded, %one : index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x96xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x96xf32>) outs(%tile : !pto.tile_buf<vec, 1x96xf32>)
+    return
+  }
+}
+
+//--- unknown_divisor.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 96 : index
+    %index = arith.index_castui %raw : i32 to index
+    %offset = arith.remsi %index, %unknown : index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x96xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x96xf32>) outs(%tile : !pto.tile_buf<vec, 1x96xf32>)
+    return
+  }
+}
+
+//--- zero_divisor.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 96 : index
+    %index = arith.index_castui %raw : i32 to index
+    %offset = arith.remsi %index, %zero : index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x96xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x96xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x96xf32>) outs(%tile : !pto.tile_buf<vec, 1x96xf32>)
+    return
+  }
+}
+
+//--- unaligned.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 336 : index
+    %cols = arith.constant 96 : index
+    %width = arith.constant 8 : index
+    %index = arith.index_castui %raw : i32 to index
+    %nine = arith.constant 9 : index
+    %offset = arith.remsi %index, %nine : index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%zero, %offset], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x8xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x8xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x8xf32>) outs(%tile : !pto.tile_buf<vec, 1x8xf32>)
+    return
+  }
+}
+
+//--- first_invalid_u8.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 255 : index
+    %cols = arith.constant 8 : index
+    %width = arith.constant 8 : index
+    %narrow = arith.trunci %raw : i32 to i8
+    %offset = arith.index_castui %narrow : i8 to index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x8xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x8xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x8xf32>) outs(%tile : !pto.tile_buf<vec, 1x8xf32>)
+    return
+  }
+}
+
+//--- narrow_destination.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @bad(%input: !pto.ptr<f32>, %raw: i32, %wide: i64, %unknown: index) {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 256 : index
+    %cols = arith.constant 8 : index
+    %width = arith.constant 8 : index
+    %narrow = arith.trunci %raw : i32 to i8
+    %extended = arith.extui %narrow : i8 to i32
+    %offset = arith.index_cast %extended : i32 to index
+    %view = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %part = pto.partition_view %view, offsets = [%offset, %zero], sizes = [%one, %width] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x8xf32>
+    %tile = pto.alloc_tile : !pto.tile_buf<vec, 1x8xf32>
+    pto.tload ins(%part : !pto.partition_tensor_view<1x8xf32>) outs(%tile : !pto.tile_buf<vec, 1x8xf32>)
+    return
+  }
+}
