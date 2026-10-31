@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 %s -o %t.cpp
+// RUN: FileCheck %s --check-prefix=INDEX --input-file=%t.cpp
+// RUN: FileCheck %s --check-prefix=RESULT --input-file=%t.cpp
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %s -o %t.cpp
+// RUN: FileCheck %s --check-prefix=INDEX --input-file=%t.cpp
+// RUN: FileCheck %s --check-prefix=RESULT --input-file=%t.cpp
+// Reusing indices must wait for their V read; reusing dst must wait for MTE3.
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_gather_reuse(%output: !pto.ptr<f32>, %output1: !pto.ptr<f32>, %input: !pto.ptr<f32>, %positions: !pto.ptr<i32>, %positions1: !pto.ptr<i32>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 8 : index
+    %source_cols = arith.constant 80 : index
+    %cols = arith.constant 96 : index
+    %input_stride = arith.constant 112 : index
+    %output_stride = arith.constant 128 : index
+    %source_col = arith.constant 16 : index
+    %index_col = arith.constant 8 : index
+    %input_view = pto.make_tensor_view %input, shape = [%rows, %input_stride], strides = [%input_stride, %one] : !pto.tensor_view<?x?xf32>
+    %index_view = pto.make_tensor_view %positions, shape = [%rows, %input_stride], strides = [%input_stride, %one] : !pto.tensor_view<?x?xi32>
+    %output_view = pto.make_tensor_view %output, shape = [%rows, %output_stride], strides = [%output_stride, %one] : !pto.tensor_view<?x?xf32>
+    %input_part = pto.partition_view %input_view, offsets = [%zero, %source_col], sizes = [%rows, %source_cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<8x80xf32>
+    %index_part = pto.partition_view %index_view, offsets = [%zero, %index_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<8x96xi32>
+    %output_part = pto.partition_view %output_view, offsets = [%zero, %source_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<8x96xf32>
+    %source = pto.alloc_tile : !pto.tile_buf<vec, 8x80xf32>
+    %indices = pto.alloc_tile : !pto.tile_buf<vec, 8x96xi32>
+    %scratch = pto.alloc_tile : !pto.tile_buf<vec, 8x192xi32>
+    %result = pto.alloc_tile : !pto.tile_buf<vec, 8x96xf32>
+    %index_view1 = pto.make_tensor_view %positions1, shape = [%rows, %input_stride], strides = [%input_stride, %one] : !pto.tensor_view<?x?xi32>
+    %output_view1 = pto.make_tensor_view %output1, shape = [%rows, %output_stride], strides = [%output_stride, %one] : !pto.tensor_view<?x?xf32>
+    %index_part1 = pto.partition_view %index_view1, offsets = [%zero, %index_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<8x96xi32>
+    %output_part1 = pto.partition_view %output_view1, offsets = [%zero, %source_col], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<8x96xf32>
+    pto.tload ins(%input_part : !pto.partition_tensor_view<8x80xf32>) outs(%source : !pto.tile_buf<vec, 8x80xf32>)
+    pto.tload ins(%index_part : !pto.partition_tensor_view<8x96xi32>) outs(%indices : !pto.tile_buf<vec, 8x96xi32>)
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    pto.tstore ins(%result : !pto.tile_buf<vec, 8x96xf32>) outs(%output_part : !pto.partition_tensor_view<8x96xf32>)
+    pto.tload ins(%index_part1 : !pto.partition_tensor_view<8x96xi32>) outs(%indices : !pto.tile_buf<vec, 8x96xi32>)
+    pto.tgather ins(%source, %indices, %scratch : !pto.tile_buf<vec, 8x80xf32>, !pto.tile_buf<vec, 8x96xi32>, !pto.tile_buf<vec, 8x192xi32>) outs(%result : !pto.tile_buf<vec, 8x96xf32>)
+    pto.tstore ins(%result : !pto.tile_buf<vec, 8x96xf32>) outs(%output_part1 : !pto.partition_tensor_view<8x96xf32>)
+    return
+  }
+}
+// INDEX-LABEL: a1_gather_reuse(
+// INDEX: TGATHER(
+// INDEX: set_flag(PIPE_V, PIPE_MTE2,
+// INDEX: wait_flag(PIPE_V, PIPE_MTE2,
+// INDEX: TLOAD(
+// INDEX: TGATHER(
+// RESULT-LABEL: a1_gather_reuse(
+// RESULT: TSTORE(
+// RESULT: set_flag(PIPE_MTE3, PIPE_V,
+// RESULT: wait_flag(PIPE_MTE3, PIPE_V,
+// RESULT: TGATHER(
+// RESULT: TSTORE(
