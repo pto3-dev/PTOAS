@@ -456,13 +456,14 @@ bool vectorBuffersOverlap(Value firstValue, Value secondValue)
     return a < b + secondBytes && b < a + firstBytes;
 }
 
-LogicalResult validateWritableVectorAliases(Operation* op, ValueRange values, StringRef message)
+LogicalResult validateWritableVectorAliases(
+    Operation* op, ValueRange values, StringRef message, unsigned readOnlyOperands = 2)
 {
-    // The first two operands are read-only. Writable operands must not overlap
+    // Leading operands are read-only. Writable operands must not overlap
     // either input or each other; unknown addresses retain the ISA runtime guard.
     for (unsigned i = 0; i < values.size(); ++i) {
         for (unsigned j = i + 1; j < values.size(); ++j) {
-            if (i == 0 && j == 1) {
+            if (i < readOnlyOperands && j < readOnlyOperands) {
                 continue;
             }
             if (vectorBuffersOverlap(values[i], values[j])) {
@@ -549,6 +550,70 @@ LogicalResult validateSort32(TSort32Op op)
     return validateWritableVectorAliases(op, values, "A1 sort32 requires disjoint writable buffers.");
 }
 
+LogicalResult validateMergeBuffers(TMrgSortOp op, ValueRange buffers)
+{
+    for (Value value : buffers) {
+        auto tile = dyn_cast<TileBufType>(value.getType());
+        auto space = tile ? dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace()) : AddressSpaceAttr();
+        const bool supported = tile && space && space.getAddressSpace() == AddressSpace::VEC &&
+            tile.getElementType().isF32() && tile.getShape()[0] == 1 && tile.getBLayoutValueI32() == 0;
+        if (!supported) {
+            return op.emitError("A1 merge requires full one-row FP32 Vec buffers.");
+        }
+    }
+    return success();
+}
+
+FailureOr<int64_t> getMergeSourceCols(TMrgSortOp op)
+{
+    int64_t sourceCols = 0;
+    for (Value value : op.getSrcs()) {
+        const int64_t columns = cast<TileBufType>(value.getType()).getShape()[1];
+        if (columns < 32 || columns % 32) {
+            return op.emitError("A1 merge sources require complete 16-pair groups.");
+        }
+        // At most four sources already passed the individual 128 KiB check.
+        sourceCols += columns;
+    }
+    constexpr int64_t proposalExpansion = 8;
+    if (sourceCols > static_cast<int64_t>(kA1UBCapacityBytes / (proposalExpansion * sizeof(float)))) {
+        return op.emitError("A1 merge proposal scratch exceeds the 128 KiB UB budget.");
+    }
+    return sourceCols;
+}
+
+LogicalResult validateMerge(TMrgSortOp op)
+{
+    const bool multiList = (op.isFormat2() || op.isFormat2WithoutTmp()) && !op.getBlockLen();
+    if (!multiList) {
+        return op.emitError("A1 merge supports the multi-list form only.");
+    }
+    SmallVector<Value> buffers(op.getSrcs().begin(), op.getSrcs().end());
+    buffers.push_back(op.getDst());
+    if (op.getTmp()) {
+        buffers.push_back(op.getTmp());
+    }
+    if (failed(validateMergeBuffers(op, buffers))) {
+        return failure();
+    }
+    auto sourceCols = getMergeSourceCols(op);
+    if (failed(sourceCols)) {
+        return failure();
+    }
+    const auto destination = cast<TileBufType>(op.getDst().getType());
+    if (destination.getShape()[1] > *sourceCols) {
+        return op.emitError("A1 merge destination cannot exceed the total source width.");
+    }
+    if (op.getTmp()) {
+        auto scratch = cast<TileBufType>(op.getTmp().getType());
+        if (scratch.getShape()[1] < *sourceCols * 8) {
+            return op.emitError("A1 merge scratch requires two eight-field proposal banks.");
+        }
+    }
+    return validateWritableVectorAliases(
+        op, buffers, "A1 merge requires disjoint writable buffers.", op.getSrcs().size());
+}
+
 LogicalResult validateType(Operation* op, Type type)
 {
     if (auto tile = dyn_cast<TileBufType>(type))
@@ -617,7 +682,7 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (op->getName().getDialectNamespace() == "pto" &&
             !isa<
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, SubViewOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
-                TMulSOp, TGatherOp, TSort32Op,
+                TMulSOp, TGatherOp, TSort32Op, TMrgSortOp,
                 TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
                 TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
@@ -640,6 +705,11 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         }
         auto sort = dyn_cast<TSort32Op>(op);
         if (sort && failed(validateSort32(sort))) {
+            return WalkResult::interrupt();
+        }
+        auto merge = dyn_cast<TMrgSortOp>(op);
+        const bool invalidMerge = merge && failed(validateMerge(merge));
+        if (invalidMerge) {
             return WalkResult::interrupt();
         }
         if (auto view = dyn_cast<MakeTensorViewOp>(op))

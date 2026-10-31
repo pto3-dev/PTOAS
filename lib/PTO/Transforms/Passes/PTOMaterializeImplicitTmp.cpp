@@ -1047,7 +1047,11 @@ inferTMrgSortTmpType(pto::TMrgSortOp op, MLIRContext *ctx) {
     if (!elementType) {
       elementType = srcTy.getElementType();
     }
-    totalCols += shape[1];
+    int64_t updatedCols;
+    if (llvm::AddOverflow(totalCols, shape[1], updatedCols)) {
+      return op.emitOpError("tmrgsort source column total is not representable");
+    }
+    totalCols = updatedCols;
     operands.push_back(src);
   }
   if (!elementType || totalCols <= 0) {
@@ -1063,6 +1067,13 @@ inferTMrgSortTmpType(pto::TMrgSortOp op, MLIRContext *ctx) {
     }
   }
   int64_t tmpCols = std::max(totalCols, dstCols);
+  if (pto::isTargetArchA1(op.getOperation())) {
+    // Two eight-field proposal banks for compact two-field source pairs.
+    constexpr int64_t proposalExpansion = 8;
+    if (llvm::MulOverflow(totalCols, proposalExpansion, tmpCols)) {
+      return op.emitOpError("A1 merge proposal scratch size is not representable");
+    }
+  }
   return std::make_pair(
       makeVecTmpType(ctx, {1, tmpCols}, elementType, {1, tmpCols}),
       std::move(operands));

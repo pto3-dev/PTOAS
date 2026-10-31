@@ -188,6 +188,29 @@ std::optional<SyncMacroModel> getTScatterSyncMacroModel(pto::TScatterOp op) {
   return model;
 }
 
+std::optional<SyncMacroModel> getTMergeSyncMacroModel(pto::TMrgSortOp op) {
+  const bool a1Merge = isTargetArchA1(op.getOperation()) && op.isFormat2();
+  if (!a1Merge) {
+    return std::nullopt;
+  }
+  SyncMacroModel model;
+  // S initializes the offset table, V stages/merges proposals, S compacts
+  // the stable prefix, then publishes to V. Helper event 7 is drained.
+  addPhase(model, PipelineType::PIPE_S, ValueRange{op.getTmp()}, ValueRange{});
+  SmallVector<Value> vectorReads(op.getSrcs().begin(), op.getSrcs().end());
+  vectorReads.push_back(op.getTmp());
+  addPhase(model, PipelineType::PIPE_V, ValueRange{op.getTmp()}, vectorReads);
+  SmallVector<Value> scalarReads{op.getTmp()};
+  if (op.getExhausted()) {
+    scalarReads.push_back(op.getDst());
+  }
+  addPhase(model, PipelineType::PIPE_S, ValueRange{op.getDst()}, scalarReads);
+  addPhase(model, PipelineType::PIPE_V, ValueRange{}, ValueRange{});
+  addBidirectionalHiddenEvent(model, PipelineType::PIPE_S, PipelineType::PIPE_V,
+                             ArrayRef<unsigned>{kA1ReservedEventId});
+  return model;
+}
+
 std::optional<SyncMacroModel> getTSort32SyncMacroModel(pto::TSort32Op op) {
   const bool a1ExplicitSort = isTargetArchA1(op.getOperation()) && op.getTmp();
   if (!a1ExplicitSort) {
@@ -471,6 +494,9 @@ std::optional<SyncMacroModel> mlir::pto::getSyncMacroModel(Operation *op) {
   }
   if (auto tscatter = dyn_cast<pto::TScatterOp>(op)) {
     return getTScatterSyncMacroModel(tscatter);
+  }
+  if (auto merge = dyn_cast<pto::TMrgSortOp>(op)) {
+    return getTMergeSyncMacroModel(merge);
   }
   if (auto sort = dyn_cast<pto::TSort32Op>(op)) {
     return getTSort32SyncMacroModel(sort);
