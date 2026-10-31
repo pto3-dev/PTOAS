@@ -447,6 +447,15 @@ Binary arithmetic masks a final incomplete 256-byte repeat (128 FP16 or
 64 FP32 elements per complete repeat); DMA rows remain 32-byte aligned.
 Load/store, `TADD`, `TSUB`, `TMUL`, pointer/view construction, allocation, block
 indices, and local synchronization are enabled.
+FP16/FP32 full-width static row subviews may follow same-type, row-major
+`TRESHAPE` aliases and other validated row subviews rooted in a local allocation.
+Each interval must fit its immediate parent; byte offsets compose without a
+payload copy. Memory planning and automatic DMA synchronization retain the
+shared allocation through the chain, including writes through a child view.
+Partial columns, dynamic rows and unknown allocation roots remain rejected.
+CPU/raw-bit and native offline coverage is available in
+`test/npu_validation/scripts/test_a1_reshape_rows_host.sh`.
+
 Matching 32-bit integer ND buffers (`i32`, `si32`, `ui32`) are also supported
 for allocation, load/store and structural control flow. Rows retain the same
 32-byte alignment, full static shape, UB budget and bounded partition checks.
