@@ -6,7 +6,7 @@
 // RUN: ptoas --pto-arch=a1 --pto-level=level3 --enable-insert-sync %s -o - | FileCheck %s
 // RUN: sed 's/slot_base = arith.constant 0/slot_base = arith.constant 1/' %s > %t.align.pto
 // RUN: not ptoas --pto-arch=a1 --pto-level=level3 --enable-insert-sync %t.align.pto -o - 2>&1 | FileCheck %s --check-prefix=REJECT
-// RUN: sed 's/slot_base = arith.constant 0/slot_base = arith.constant 523776/' %s > %t.bounds.pto
+// RUN: sed 's/slot_base = arith.constant 0/slot_base = arith.constant 1048064/' %s > %t.bounds.pto
 // RUN: not ptoas --pto-arch=a1 --pto-level=level3 --enable-insert-sync %t.bounds.pto -o - 2>&1 | FileCheck %s --check-prefix=REJECT
 
 module attributes {pto.target_arch = "a1"} {

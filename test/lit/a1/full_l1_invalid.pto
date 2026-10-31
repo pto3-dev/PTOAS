@@ -1,0 +1,78 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/size.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=SIZE
+// RUN: not ptoas --pto-arch=a1 %t/address.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=ADDRESS
+// RUN: not ptoas --pto-arch=a1 %t/negative.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=NEGATIVE
+// RUN: not ptoas --pto-arch=a1 %t/unaligned.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=ADDRESS
+// NEGATIVE: addr must be non-negative
+// SIZE: A1 matrix tile exceeds its memory budget.
+// ADDRESS: A1 Mat tile address must be bounded, aligned and within its L1 memory budget.
+
+//--- size.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid_size(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 2048 : index
+    %cols = arith.constant 272 : index
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<2048x272xf16>
+    %image = pto.alloc_tile : !pto.tile_buf<mat, 2048x272xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<2048x272xf16>) outs(%image : !pto.tile_buf<mat, 2048x272xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- address.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid_address(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 16 : index
+    %cols = arith.constant 16 : index
+    %address = arith.constant 1048576 : i64
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %image = pto.alloc_tile addr = %address : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<16x16xf16>) outs(%image : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- negative.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid_negative(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 16 : index
+    %cols = arith.constant 16 : index
+    %address = arith.constant -512 : i64
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %image = pto.alloc_tile addr = %address : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<16x16xf16>) outs(%image : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- unaligned.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid_unaligned(%input: !pto.ptr<f16>) attributes {pto.entry} {
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %rows = arith.constant 16 : index
+    %cols = arith.constant 16 : index
+    %address = arith.constant 1047584 : i64
+    %tv = pto.make_tensor_view %input, shape = [%rows, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %part = pto.partition_view %tv, offsets = [%zero, %zero], sizes = [%rows, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<16x16xf16>
+    %image = pto.alloc_tile addr = %address : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    pto.tload ins(%part : !pto.partition_tensor_view<16x16xf16>) outs(%image : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}

@@ -514,9 +514,11 @@ merge implementation; blockLen format1, FP16 and source tails remain outside
 this profile. CPU and offline checks do not establish device accuracy or
 performance; proposal conversion and scalar compaction still need measurement.
 
-The current memory planner uses the A1 conservative budgets: UB 128 KiB, L1 512 KiB,
-L0A/L0B 64 KiB and L0C 256 KiB. Non-vector spaces remain unavailable to this
-first instruction profile. Event IDs 0–6 are compiler-owned; ID 7 is reserved
+The A1 memory planner uses the full 1 MiB L1 capacity reported by the CANN
+Ascend310P platform configuration. UB retains its conservative 128 KiB budget;
+L0A/L0B remain 64 KiB and L0C 256 KiB. Static and bounded dynamic Mat addresses
+must keep the complete allocation within L1, with 512-byte alignment. This
+also allows resident image bands larger than 512 KiB without changing other targets. Event IDs 0–6 are compiler-owned; ID 7 is reserved
 for ISA helpers. Local set/wait synchronization runs by default on A1.
 The unified synchronization allocator remains unsupported on A1; use the
 validated local set/wait path or conservative barrier-all mode.
