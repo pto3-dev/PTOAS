@@ -179,4 +179,3 @@ module attributes {pto.target_arch = "a1"} {
     return
   }
 }
-
