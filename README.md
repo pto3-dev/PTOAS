@@ -546,13 +546,17 @@ FP16/FP32/INT32/UINT32 values and matching INT32/UINT32 indices and scratch.
 Indices are flat source element offsets. Scratch needs one 32-bit byte offset
 per 16-bit value half; FP32/integer values therefore need twice the destination
 element count. Level1/level2 supply omitted scratch with this target-specific
-capacity; level3 requires explicit scratch. The A1 ISA copies 32-bit values as
-two 16-bit halves, preserving raw bits. Known writable overlaps fail validation;
+capacity; level3 requires explicit scratch. The matching vectorized A1 ISA writes
+only the first destination-element-count byte offsets on V, and native 16/32-bit
+gather preserves raw bits. Known writable overlaps fail validation;
 the native implementation guards runtime aliases. Source/index shapes may
 differ, but destination/index shapes must match. Existing full-shape, row-major,
 alignment, UB and dtype checks remain in force; mask/compare forms are not yet
-implemented on A1. Synchronization models scalar index reads and vector value
-reads separately and reserves local helper event 7. CPU/offline tests are in
+implemented on A1. Synchronization models source/index reads and scratch/result
+writes on V, with a final S publication phase and reserved bidirectional helper
+event 7. Scratch retains read/write effects to preserve its unused suffix. Use
+the vectorized gather ISA (commit 9bf9c269 or integrated aace5d1b); the older scalar
+offset implementation requires its older scheduling model. CPU/offline tests are in
 `test/npu_validation/scripts/test_a1_indexed_gather_host.sh`; device accuracy,
 concurrency and performance still require hardware validation.
 

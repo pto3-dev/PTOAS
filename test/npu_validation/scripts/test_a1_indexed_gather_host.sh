@@ -48,9 +48,12 @@ for dtype in f16 f32 i32 ui32; do
                 "$profile/template.pto" > "$profile/input.pto"
             "$ptoas_bin" --pto-arch=a1 "$profile/input.pto" -o "$profile/generated.cpp"
             grep -Fq 'TGATHER(' "$profile/generated.cpp"
-            grep -Fq 'set_flag(PIPE_MTE2, PIPE_S,' "$profile/generated.cpp"
-            grep -Fq 'wait_flag(PIPE_MTE2, PIPE_S,' "$profile/generated.cpp"
+            if grep -Fq 'PIPE_MTE2, PIPE_S' "$profile/generated.cpp"; then
+                printf 'Unexpected scalar index DMA consumer in vector gather\n' >&2
+                exit 1
+            fi
             grep -Fq 'set_flag(PIPE_MTE2, PIPE_V,' "$profile/generated.cpp"
+            grep -Fq 'wait_flag(PIPE_MTE2, PIPE_V,' "$profile/generated.cpp"
             grep -Fq 'wait_flag(PIPE_V, PIPE_MTE3,' "$profile/generated.cpp"
             printf '#include <cstdint>\n' > "$profile/oracle.cpp"
             cat -- "$profile/generated.cpp" "$repo_root/test/npu_validation/scripts/a1_indexed_gather_cpu.cpp" \
@@ -68,3 +71,12 @@ for dtype in f16 f32 i32 ui32; do
 done
 [ "$profile_count" -eq 16 ]
 printf 'A1 gather: %s profiles, 49152 logical values bitwise, CPU/offline only.\n' "$profile_count"
+# Compile the dependency regressions against the same native implementation.
+# The initialized scratch-only store observes preserved suffix storage; the
+# replay fixture exercises index DMA and destination reuse around two calls.
+for name in gather_vector_reuse gather_vector_scratch; do
+    "$ptoas_bin" --pto-arch=a1 "$repo_root/test/lit/a1/$name.pto" -o "$gather_work/$name.cpp"
+    "$native_compiler" -c -O2 -x cce -std=c++17 --cce-aicore-only --cce-aicore-arch=dav-m200 \
+        "-I$PTO_ISA_ROOT/include" "$gather_work/$name.cpp" -o "$gather_work/$name.o"
+done
+printf 'Two vector gather dependency regressions compiled for m200.\n'
