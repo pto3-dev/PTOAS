@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/row_alignment.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=ALIGN
+// RUN: not ptoas --pto-arch=a1 %t/column_alignment.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=ALIGN
+// RUN: not ptoas --pto-arch=a1 %t/row_bounds.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
+// RUN: not ptoas --pto-arch=a1 %t/column_bounds.pto -o /dev/null 2>&1 | FileCheck %s --check-prefix=REJECT
+// ALIGN: boxed layout subview offsets must be multiples of inner shape
+// REJECT: A1 Mat subviews require
+
+//--- row_alignment.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid() {
+    %row = arith.constant 1 : index
+    %column = arith.constant 16 : index
+    %source = pto.alloc_tile : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %view = pto.subview %source[%row, %column] sizes [16, 16] : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512> -> !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.tmov ins(%view : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- column_alignment.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid() {
+    %row = arith.constant 16 : index
+    %column = arith.constant 1 : index
+    %source = pto.alloc_tile : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %view = pto.subview %source[%row, %column] sizes [16, 16] : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512> -> !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.tmov ins(%view : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- row_bounds.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid() {
+    %row = arith.constant 64 : index
+    %column = arith.constant 80 : index
+    %source = pto.alloc_tile : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %view = pto.subview %source[%row, %column] sizes [16, 16] : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512> -> !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.tmov ins(%view : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- column_bounds.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid() {
+    %row = arith.constant 48 : index
+    %column = arith.constant 96 : index
+    %source = pto.alloc_tile : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %view = pto.subview %source[%row, %column] sizes [16, 16] : !pto.tile_buf<mat, 64x96xf16, blayout=col_major, slayout=row_major, fractal=512> -> !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.tmov ins(%view : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>) outs(%left : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}

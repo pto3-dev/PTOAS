@@ -689,10 +689,14 @@ A1 `pto.subview` also supports a single-level, full-height column interval of
 an allocated FP16 NZ Mat tile. The static column offset and extent must be
 C16 aligned and bounded, with unchanged NZ/compact layout and full valid
 shape. The child shares L1 storage, keeps the parent's C16 stride and feeds
-N16/N32 Right operands without a reload or extraction copy. Existing C16
-row intervals retain their original contract; partial-height multi-C16,
-dynamic-column and unsupported-layout views remain rejected. CPU/offline
-checks do not establish hardware overlap or throughput.
+N16/N32 Right operands without a reload or extraction copy. A bounded,
+aligned row interval within a single C16 column is also supported, including
+inside a wider NZ parent. Both offsets and both extents must be C16 aligned;
+the source must be allocated with full valid shape. Address rebasing uses
+the parent's NZ column pitch, while the compact child retains only its own
+row extent, so a Mat-to-Left consumer needs no copy to another L1 tile.
+Partial-height multi-C16, dynamic-column and unsupported-layout views remain
+rejected. CPU/offline checks do not establish hardware overlap or throughput.
 
 
 ### A1 row-strided resident panel insertion
