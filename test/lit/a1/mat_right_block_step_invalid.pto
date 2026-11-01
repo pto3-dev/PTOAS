@@ -1,0 +1,377 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/zero_step.pto -o %t/zero_step.cpp 2>&1 | FileCheck %s --check-prefix=NEG0
+// RUN: not ptoas --pto-arch=a1 %t/negative_step.pto -o %t/negative_step.cpp 2>&1 | FileCheck %s --check-prefix=NEG1
+// RUN: not ptoas --pto-arch=a1 %t/unsigned_overflow.pto -o %t/unsigned_overflow.cpp 2>&1 | FileCheck %s --check-prefix=NEG2
+// RUN: not ptoas --pto-arch=a1 %t/signed_max_step.pto -o %t/signed_max_step.cpp 2>&1 | FileCheck %s --check-prefix=NEG3
+// RUN: not ptoas --pto-arch=a1 %t/too_wide_span.pto -o %t/too_wide_span.cpp 2>&1 | FileCheck %s --check-prefix=NEG4
+// RUN: not ptoas --pto-arch=a1 %t/source_row_span.pto -o %t/source_row_span.cpp 2>&1 | FileCheck %s --check-prefix=NEG5
+// RUN: not ptoas --pto-arch=a1 %t/unaligned_row.pto -o %t/unaligned_row.cpp 2>&1 | FileCheck %s --check-prefix=NEG6
+// RUN: not ptoas --pto-arch=a1 %t/unaligned_col.pto -o %t/unaligned_col.cpp 2>&1 | FileCheck %s --check-prefix=NEG7
+// RUN: not ptoas --pto-arch=a1 %t/unknown_row.pto -o %t/unknown_row.cpp 2>&1 | FileCheck %s --check-prefix=NEG8
+// RUN: not ptoas --pto-arch=a1 %t/unknown_col.pto -o %t/unknown_col.cpp 2>&1 | FileCheck %s --check-prefix=NEG9
+// RUN: not ptoas --pto-arch=a1 %t/negative_row.pto -o %t/negative_row.cpp 2>&1 | FileCheck %s --check-prefix=NEG10
+// RUN: not ptoas --pto-arch=a1 %t/negative_col.pto -o %t/negative_col.cpp 2>&1 | FileCheck %s --check-prefix=NEG11
+// RUN: not ptoas --pto-arch=a1 %t/row_overflow.pto -o %t/row_overflow.cpp 2>&1 | FileCheck %s --check-prefix=NEG12
+// RUN: not ptoas --pto-arch=a1 %t/col_overflow.pto -o %t/col_overflow.cpp 2>&1 | FileCheck %s --check-prefix=NEG13
+// RUN: not ptoas --pto-arch=a1 %t/source_l1_budget.pto -o %t/source_l1_budget.cpp 2>&1 | FileCheck %s --check-prefix=NEG14
+// RUN: not ptoas --pto-arch=a1 %t/target_l0b_budget.pto -o %t/target_l0b_budget.cpp 2>&1 | FileCheck %s --check-prefix=NEG15
+// RUN: not ptoas --pto-arch=a1 %t/large_target_rows.pto -o %t/large_target_rows.cpp 2>&1 | FileCheck %s --check-prefix=NEG16
+// RUN: not ptoas --pto-arch=a1 %t/wide_target.pto -o %t/wide_target.cpp 2>&1 | FileCheck %s --check-prefix=NEG17
+// RUN: not ptoas --pto-arch=a1 %t/wrong_target_layout.pto -o %t/wrong_target_layout.cpp 2>&1 | FileCheck %s --check-prefix=NEG18
+// RUN: not ptoas --pto-arch=a1 %t/wrong_target_space.pto -o %t/wrong_target_space.cpp 2>&1 | FileCheck %s --check-prefix=NEG19
+// RUN: not ptoas --pto-arch=a1 %t/wrong_source_space.pto -o %t/wrong_source_space.cpp 2>&1 | FileCheck %s --check-prefix=NEG20
+// RUN: not ptoas --pto-arch=a1 %t/fp32.pto -o %t/fp32.cpp 2>&1 | FileCheck %s --check-prefix=NEG21
+// RUN: not ptoas --pto-arch=a1 %t/partial_source.pto -o %t/partial_source.cpp 2>&1 | FileCheck %s --check-prefix=NEG22
+// RUN: not ptoas --pto-arch=a3 %t/a3_attribute.pto -o %t/a3_attribute.cpp 2>&1 | FileCheck %s --check-prefix=NEG23
+// RUN: not ptoas --pto-arch=a5 %t/a5_attribute.pto -o %t/a5_attribute.cpp 2>&1 | FileCheck %s --check-prefix=NEG24
+// RUN: not ptoas --pto-arch=a1 %t/ordinary_unaligned.pto -o %t/ordinary_unaligned.cpp 2>&1 | FileCheck %s --check-prefix=NEG25
+// RUN: not ptoas --pto-arch=a3 %t/ordinary_a3_row_overflow.pto -o %t/ordinary_a3_row_overflow.cpp 2>&1 | FileCheck %s --check-prefix=NEG26
+// RUN: not ptoas --pto-arch=a5 %t/ordinary_a5_col_overflow.pto -o %t/ordinary_a5_col_overflow.cpp 2>&1 | FileCheck %s --check-prefix=NEG27
+
+// RUN: not ptoas --pto-arch=a1 %t/unknown_col_target_wider.pto -o %t/unknown_col_target_wider.cpp 2>&1 | FileCheck %s --check-prefix=WIDTH
+
+// RUN: not ptoas --pto-arch=a1 %t/fused_relu.pto -o %t/fused_relu.cpp 2>&1 | FileCheck %s --check-prefix=RELU
+// RUN: not ptoas --pto-arch=a1 %t/source_signed_max_bytes.pto -o %t/source_signed_max_bytes.cpp 2>&1 | FileCheck %s --check-prefix=BIGBYTES
+
+//--- zero_step.pto
+// NEG0: A1 block_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 0 : i64}
+    return
+  }
+}
+
+//--- negative_step.pto
+// NEG1: A1 block_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = -1 : i64}
+    return
+  }
+}
+
+//--- unsigned_overflow.pto
+// NEG2: A1 block_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4294967296 : i64}
+    return
+  }
+}
+
+//--- signed_max_step.pto
+// NEG3: A1 block_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 9223372036854775807 : i64}
+    return
+  }
+}
+
+//--- too_wide_span.pto
+// NEG4: complete selected span
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 8192 : i64}
+    return
+  }
+}
+
+//--- source_row_span.pto
+// NEG5: A1 extraction requires a bounded complete source span
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1792 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- unaligned_row.pto
+// NEG6: A1 extraction requires a bounded complete source span
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- unaligned_col.pto
+// NEG7: A1 extraction requires a bounded complete source span
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 1 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- unknown_row.pto
+// NEG8: A1 extraction requires bounded C16-aligned source offsets
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>, %row: index) {
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- unknown_col.pto
+// NEG9: A1 extraction requires bounded C16-aligned source offsets
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>, %col: index) {
+    %row = arith.constant 1776 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- negative_row.pto
+// NEG10: expects indexRow to be non-negative
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant -1 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- negative_col.pto
+// NEG11: expects indexCol to be non-negative
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant -1 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- row_overflow.pto
+// NEG12: expects indexRow + dst.rows <= src.rows
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 9223372036854775807 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- col_overflow.pto
+// NEG13: expects indexCol + dst.cols <= src.cols
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 9223372036854775807 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- source_l1_budget.pto
+// NEG14: A1 extraction exceeds its L1 or L0B memory budget
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 32784x16xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 0 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 32784x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- target_l0b_budget.pto
+// NEG15: A1 extraction exceeds its L1 or L0B memory budget
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 4096x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 2048x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 0 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 4096x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 2048x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 1 : i64}
+    return
+  }
+}
+
+//--- large_target_rows.pto
+// NEG16: A1 extraction requires full static
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 4096x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 2304x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 0 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 4096x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 2304x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 1 : i64}
+    return
+  }
+}
+
+//--- wide_target.pto
+// NEG17: A1 extraction requires full static
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x48xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x48xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- wrong_target_layout.pto
+// NEG18: A1 extraction requires full static
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=row_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- wrong_target_space.pto
+// NEG19: A1 extraction supports FP16 Mat-to-Right operands only
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<left, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<left, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- wrong_source_space.pto
+// NEG20: A1 extraction supports FP16 Mat-to-Right operands only
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<vec, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- fp32.pto
+// NEG21: A1 extraction supports FP16 Mat-to-Right operands only
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf32, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf32, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf32, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf32, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- partial_source.pto
+// NEG22: A1 extraction requires full static
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=2288, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=2288, v_col=32, blayout=col_major, slayout=row_major, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- a3_attribute.pto
+// NEG23: block_step is supported only on the A1
+module attributes {pto.target_arch = "a3"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- a5_attribute.pto
+// NEG24: block_step is supported only on the A1
+module attributes {pto.target_arch = "a5"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- ordinary_unaligned.pto
+// NEG25: A1 extraction requires a bounded complete source span
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    return
+  }
+}
+
+//--- ordinary_a3_row_overflow.pto
+// NEG26: expects indexRow + dst.rows <= src.rows
+module attributes {pto.target_arch = "a3"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 9223372036854775807 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    return
+  }
+}
+
+//--- ordinary_a5_col_overflow.pto
+// NEG27: expects indexCol + dst.cols <= src.cols
+module attributes {pto.target_arch = "a5"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 9223372036854775807 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    return
+  }
+}
+
+//--- unknown_col_target_wider.pto
+// WIDTH: A1 extraction requires full static
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x16xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>, %col: index) {
+    %row = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- fused_relu.pto
+// RELU: A1 extraction does not support auxiliary operands or fused modes
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %zero = arith.constant 0 : index
+    pto.textract ins(%s, %zero, %zero : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64, reluPreMode = #pto<relu_pre_mode normal_relu>}
+    return
+  }
+}
+
+//--- source_signed_max_bytes.pto
+// BIGBYTES: A1 extraction exceeds its L1 or L0B memory budget
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<mat, 9223372036854775792x16xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %zero = arith.constant 0 : index
+    pto.textract ins(%s, %zero, %zero : !pto.tile_buf<mat, 9223372036854775792x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 1 : i64}
+    return
+  }
+}

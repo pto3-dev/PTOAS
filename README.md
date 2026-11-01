@@ -715,3 +715,24 @@ The compiler proves both static and bounded-loop offsets without overflowing
 index sums or span products. Use the matching row-strided A1 PTO-ISA. CPU and
 offline compilation regressions validate transfer semantics, not device overlap
 or model performance.
+
+
+### A1 block-strided Mat-to-Right extraction
+
+The existing `pto.textract` supports an optional `block_step = 4 : i64` on
+A1. Output element `(r,c)` selects source element
+`(indexRow + (r / 16) * block_step * 16 + r % 16, indexCol + c)`.
+The source is a full static FP16 NZ/ZZ Mat within 1 MiB L1; the destination
+is a full N16/N32 ZN Right within 64 KiB L0B and at most 2048 rows.
+Both offsets are C16-aligned and the complete selected span must fit.
+The positive step fits unsigned 32 bits; a single output block ignores its
+unused native inter-block stride. Static and bounded loop/SPMD offsets
+are proved before conversion to native `uint16_t` offsets.
+
+An explicit step, including one, lowers to `TEXTRACT<step>`; an absent
+attribute retains ordinary contiguous extraction. A1 extraction is native
+MTE1 DMA and does not expand through rectangular TileLib templates.
+Other targets reject `block_step`. Existing memory effects preserve source
+readiness, MTE1-to-M consumption and M-to-MTE1 Right-bank reuse dependencies.
+Use the matching block-step A1 PTO-ISA. CPU and offline target compilation
+validate semantics and encoding, not device overlap or model performance.

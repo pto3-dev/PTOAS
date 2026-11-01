@@ -1,0 +1,102 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: pto-test-opt --pto-insert-template-attributes %s | FileCheck %s --check-prefix=KEEP
+module attributes {pto.target_arch = "a1"} {
+  func.func @sparse_nz(%s: !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 1776 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 2304x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+  func.func @sparse_zz(%s: !pto.tile_buf<mat, 4608x64xf16, blayout=row_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 4080 : index
+    %col = arith.constant 16 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 4608x64xf16, blayout=row_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    return
+  }
+  func.func @last_l1_block(%s: !pto.tile_buf<mat, 32768x16xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 32x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 0 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 32768x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 32x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 2047 : i64}
+    return
+  }
+  func.func @last_l1_column(%s: !pto.tile_buf<mat, 256x2048xf16, blayout=row_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 32x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 224 : index
+    %col = arith.constant 2016 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 256x2048xf16, blayout=row_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 32x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 1 : i64}
+    return
+  }
+  func.func @single_unused_step(%s: !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 0 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 16x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4294967295 : i64}
+    return
+  }
+  func.func @ordinary_step_one(%s: !pto.tile_buf<mat, 256x64xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 128x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 32 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 256x64xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 128x32xf16, blayout=row_major, slayout=col_major, fractal=512>)
+    return
+  }
+  func.func @explicit_step_one(%s: !pto.tile_buf<mat, 256x64xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 128x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 32 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 256x64xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 128x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 1 : i64}
+    return
+  }
+  func.func @full_l0b(%s: !pto.tile_buf<mat, 4096x16xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 2048x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %row = arith.constant 16 : index
+    %col = arith.constant 0 : index
+    pto.textract ins(%s, %row, %col : !pto.tile_buf<mat, 4096x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 2048x16xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 2 : i64}
+    return
+  }
+  func.func @spmd_blocks(%s: !pto.tile_buf<mat, 4608x32xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {
+    %block = pto.get_block_idx
+    %id = arith.index_cast %block : i64 to index
+    %two = arith.constant 2 : index
+    %four = arith.constant 4 : index
+    %c16 = arith.constant 16 : index
+    %stripe = arith.constant 2304 : index
+    %zero = arith.constant 0 : index
+    %group = arith.remui %id, %two : index
+    %phase = arith.remui %id, %four : index
+    %base = arith.muli %group, %stripe : index
+    %delta = arith.muli %phase, %c16 : index
+    %phase_base = arith.addi %base, %delta : index
+    %one = arith.constant 1 : index
+    %per_ki = arith.constant 576 : index
+    scf.for %ki = %zero to %four step %one {
+    %ki_row = arith.muli %ki, %per_ki : index
+    %row = arith.addi %phase_base, %ki_row : index
+    pto.textract ins(%s, %row, %zero : !pto.tile_buf<mat, 4608x32xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<right, 144x32xf16, blayout=row_major, slayout=col_major, fractal=512>) {block_step = 4 : i64}
+    }
+    return
+  }
+}
+// CHECK-LABEL: sparse_nz
+// CHECK: TEXTRACT<4>(
+// CHECK-LABEL: sparse_zz
+// CHECK: TEXTRACT<4>(
+// CHECK-LABEL: last_l1_block
+// CHECK: TEXTRACT<2047>(
+// CHECK-LABEL: last_l1_column
+// CHECK: TEXTRACT<1>(
+// CHECK-LABEL: single_unused_step
+// CHECK: TEXTRACT<4294967295>(
+// CHECK-LABEL: ordinary_step_one
+// CHECK: TEXTRACT(
+// CHECK-LABEL: explicit_step_one
+// CHECK: TEXTRACT<1>(
+// CHECK-LABEL: full_l0b
+// CHECK: TEXTRACT<2>(
+// CHECK-LABEL: spmd_blocks
+// CHECK: get_block_idx()
+// CHECK: TEXTRACT<4>(
+// KEEP: module
+// KEEP-NOT: tilelib

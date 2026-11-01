@@ -433,7 +433,82 @@ static LogicalResult verifyTExtractA5(TExtractOp op) {
   return success();
 }
 
+static LogicalResult verifyTExtractA1Storage(TExtractOp op, const TExtractCommon &common) {
+  const auto source = common.srcTb;
+  const auto target = common.dstTb;
+  const auto sourceShape = source.getShape();
+  const auto targetShape = target.getShape();
+  const int32_t row = static_cast<int32_t>(pto::BLayout::RowMajor);
+  const int32_t col = static_cast<int32_t>(pto::BLayout::ColMajor);
+  const bool complete = source.getValidShape() == sourceShape && target.getValidShape() == targetShape &&
+      source.getCompactModeI32() == 0 && target.getCompactModeI32() == 0;
+  const bool layouts = (source.getBLayoutValueI32() == row || source.getBLayoutValueI32() == col) &&
+      source.getSLayoutValueI32() == static_cast<int32_t>(pto::SLayout::RowMajor) &&
+      target.getBLayoutValueI32() == row &&
+      target.getSLayoutValueI32() == static_cast<int32_t>(pto::SLayout::ColMajor) &&
+      source.getSFractalSizeI32() == 512 && target.getSFractalSizeI32() == 512;
+  const bool dimensions = sourceShape[0] >= 16 && sourceShape[0] % 16 == 0 &&
+      sourceShape[1] >= 16 && sourceShape[1] <= 2048 && sourceShape[1] % 16 == 0 &&
+      targetShape[0] >= 16 && targetShape[0] <= 2048 && targetShape[0] % 16 == 0 &&
+      (targetShape[1] == 16 || targetShape[1] == 32) && targetShape[1] <= sourceShape[1];
+  if (!complete || !layouts || !dimensions) {
+    return op.emitOpError("A1 extraction requires full static NZ/ZZ Mat and N16/N32 ZN Right tiles");
+  }
+  const auto sourceBytes = pto::getA1StaticTileBytes(sourceShape[0], sourceShape[1], 2, pto::AddressSpace::MAT);
+  const auto targetBytes = pto::getA1StaticTileBytes(targetShape[0], targetShape[1], 2, pto::AddressSpace::RIGHT);
+  if (!sourceBytes || !targetBytes) {
+    return op.emitOpError("A1 extraction exceeds its L1 or L0B memory budget");
+  }
+  return success();
+}
+
+static LogicalResult verifyTExtractA1Window(TExtractOp op, const TExtractCommon &common) {
+  const auto sourceShape = common.srcTb.getShape();
+  const auto targetShape = common.dstTb.getShape();
+  const auto step = op.getBlockStepAttr();
+  const auto span = pto::getA1BlockExtractSpan(targetShape[0], sourceShape[0], step ? step.getInt() : 1);
+  if (!span) {
+    return op.emitOpError("A1 block_step must be in [1, 4294967295] and its complete selected span "
+                          "must fit the source");
+  }
+  const auto row = getConstantIntegerValueEx(op.getIndexRow(), true);
+  const auto column = getConstantIntegerValueEx(op.getIndexCol(), true);
+  const bool invalidRow = row && (*row < 0 || *row % 16 || *row > sourceShape[0] - *span);
+  const bool invalidColumn = column && (*column < 0 || *column % 16 ||
+      *column > sourceShape[1] - targetShape[1]);
+  if (invalidRow || invalidColumn) {
+    return op.emitOpError("A1 extraction requires a bounded complete source span and C16-aligned offsets");
+  }
+  return success();
+}
+
+static LogicalResult verifyTExtractA1(TExtractOp op) {
+  auto common = verifyTExtractCommon(op, /*allowLowPrecision=*/false);
+  if (failed(common)) {
+    return failure();
+  }
+  if (common->srcSpace != pto::AddressSpace::MAT || common->dstSpace != pto::AddressSpace::RIGHT ||
+      !common->srcElem.isF16() || !common->dstElem.isF16()) {
+    return op.emitOpError("A1 extraction supports FP16 Mat-to-Right operands only");
+  }
+  const bool fused = op.getFp() || op.getPreQuantScalar() || op.getAccToVecModeAttr() ||
+      op.getReluPreMode() != pto::ReluPreMode::NoRelu;
+  if (fused) {
+    return op.emitOpError("A1 extraction does not support auxiliary operands or fused modes");
+  }
+  if (failed(verifyTExtractA1Storage(op, *common))) {
+    return failure();
+  }
+  return verifyTExtractA1Window(op, *common);
+}
+
 mlir::LogicalResult mlir::pto::TExtractOp::verify() {
+  if (isTargetArchA1(getOperation())) {
+    return verifyTExtractA1(*this);
+  }
+  if (getBlockStepAttr()) {
+    return emitOpError("block_step is supported only on the A1 Mat-to-Right extraction path");
+  }
   if (isa<pto::ConvTileBufType>(getSrc().getType())) {
     const bool allowLowPrecision =
         getVerifierTargetArch(getOperation()) == VerifierTargetArch::A5;

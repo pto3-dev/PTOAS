@@ -11,6 +11,7 @@
 
 #include "PTO/IR/PTO.h"
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace mlir::pto {
@@ -79,6 +80,27 @@ inline std::optional<int64_t> getA1StridedInsertSpan(int64_t sourceRows, int64_t
         return std::nullopt;
     }
     return (sourceRows - 1) * rowStep + 1;
+}
+
+// TEXTRACT preserves rows inside each C16 fractal and steps complete source
+// blocks. A single output block has no inter-block stride in its native DMA.
+inline constexpr int64_t kA1ExtractBlockRows = 16;
+inline constexpr int64_t kA1MaxExtractBlockStep = std::numeric_limits<uint32_t>::max();
+inline std::optional<int64_t> getA1BlockExtractSpan(int64_t targetRows, int64_t sourceRows,
+                                                int64_t blockStep)
+{
+    if (targetRows < kA1ExtractBlockRows || targetRows > 2048 || targetRows % kA1ExtractBlockRows ||
+        sourceRows < kA1ExtractBlockRows || sourceRows % kA1ExtractBlockRows ||
+        blockStep <= 0 || blockStep > kA1MaxExtractBlockStep) {
+        return std::nullopt;
+    }
+    const int64_t blocks = targetRows / kA1ExtractBlockRows;
+    const int64_t maxSourceBlock = sourceRows / kA1ExtractBlockRows - 1;
+    // Bound before multiplying, including malformed signed-64-bit IR values.
+    if (blocks - 1 > maxSourceBlock / blockStep) {
+        return std::nullopt;
+    }
+    return ((blocks - 1) * blockStep + 1) * kA1ExtractBlockRows;
 }
 
 // Materialize full valid shapes only when both allocation operands prove them.
