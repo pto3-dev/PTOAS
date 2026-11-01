@@ -166,6 +166,13 @@ Mat 地址，level3 接受已规划的地址。原 ConvTile 输入仍从其分�
 独立的 `test/npu_validation/scripts/test_a1_img2col_mat_host.sh` 覆盖三个 pipeline level
 的 CPU 逐位、完整 guard、输入只读及 `dav-m200` 离线编译；不证明设备并发或性能。
 
+Mat 图像的空间行数不再受 L0 的 2048 维度上限限制，而按
+`height * width * channels * 2 <= 1048576` 验证 1 MiB L1 容量；行、列仍须静态 16 对齐，
+列数仍不超过 2048，且有效形状、FP16 NZ 布局和配置必须一致。例如 640 宽、6 行的
+图像带有 3840 个空间像素，可直接供 im2col 消费。单个 C16 图像最多 32768 个像素；
+若同时驻留权重或其他 Mat，内存规划仍需计入它们的总容量。Left 目标的尺寸及 L0A
+容量限制保持不变。原生离线回归另覆盖带 512 字节 RHS Mat 的完整 L1 容量边界。
+
 ### A1 Vec 到 Mat 面板插入
 
 A1 `pto.tinsert` 支持将完整对齐的 FP16 ND Vec 面板插入 FP16 NZ Mat，
