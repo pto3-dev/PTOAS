@@ -1,0 +1,105 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/runtime_source.pto -o %t/runtime_source.cpp 2>&1 | FileCheck %s --check-prefix=FULL
+// RUN: not ptoas --pto-arch=a1 %t/partial_source.pto -o %t/partial_source.cpp 2>&1 | FileCheck %s --check-prefix=FULL
+// RUN: not ptoas --pto-arch=a1 %t/runtime_target.pto -o %t/runtime_target.cpp 2>&1 | FileCheck %s --check-prefix=FULL
+// RUN: not ptoas --pto-arch=a1 %t/partial_target.pto -o %t/partial_target.cpp 2>&1 | FileCheck %s --check-prefix=FULL
+// RUN: not ptoas --pto-arch=a1 %t/mixed_source_partial.pto -o %t/mixed_source_partial.cpp 2>&1 | FileCheck %s --check-prefix=FULL
+// RUN: not ptoas --pto-arch=a1 %t/mixed_target_partial.pto -o %t/mixed_target_partial.cpp 2>&1 | FileCheck %s --check-prefix=FULL
+// FULL: A1 row-step insertion requires full static ND source and NZ destination
+
+//--- runtime_source.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%extent: index) {
+    %source_columns = arith.constant 32 : index
+    %target_columns = arith.constant 64 : index
+    %eight = arith.constant 8 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %s = pto.alloc_tile valid_row = %extent : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- partial_source.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%extent: index) {
+    %source_columns = arith.constant 32 : index
+    %target_columns = arith.constant 64 : index
+    %eight = arith.constant 8 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %s = pto.alloc_tile valid_row = %eight : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- runtime_target.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%extent: index) {
+    %source_columns = arith.constant 32 : index
+    %target_columns = arith.constant 64 : index
+    %eight = arith.constant 8 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %s = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile valid_row = %extent : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=?, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=?, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- partial_target.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%extent: index) {
+    %source_columns = arith.constant 32 : index
+    %target_columns = arith.constant 64 : index
+    %eight = arith.constant 8 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %s = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile valid_row = %eight : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=?, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=?, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- mixed_source_partial.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%extent: index) {
+    %source_columns = arith.constant 32 : index
+    %target_columns = arith.constant 64 : index
+    %eight = arith.constant 8 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %s = pto.alloc_tile valid_col = %source_columns : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=8, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=8, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- mixed_target_partial.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%extent: index) {
+    %source_columns = arith.constant 32 : index
+    %target_columns = arith.constant 64 : index
+    %eight = arith.constant 8 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %s = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile valid_col = %target_columns : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=8, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=8, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+}

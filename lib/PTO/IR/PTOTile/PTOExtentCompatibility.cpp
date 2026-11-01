@@ -8,6 +8,38 @@
 
 // Included by PTO.cpp as part of the PTO IR implementation translation unit.
 
+// PyPTO names constant full valid extents as allocation operands while its
+// tile descriptor keeps dynamic valid dimensions. Initial IR verification runs
+// before A1 normalization: prove exactly the same extents here without mutating
+// types or accepting a partial/unproven runtime shape.
+static bool hasA1FullTileShape(Value value, TileBufType tile) {
+  const auto shape = tile.getShape();
+  const auto valid = tile.getValidShape();
+  if (valid == shape) {
+    return true;
+  }
+  auto allocation = value.getDefiningOp<AllocTileOp>();
+  const bool validRank = valid.size() == 2;
+  if (!allocation || !validRank) {
+    return false;
+  }
+  const Value extents[] = {allocation.getValidRow(), allocation.getValidCol()};
+  for (unsigned axis = 0; axis < 2; ++axis) {
+    const bool dynamic = ShapedType::isDynamic(valid[axis]);
+    if (!dynamic) {
+      if (valid[axis] != shape[axis]) {
+        return false;
+      }
+    } else {
+      const auto extent = extents[axis] ? getConstantIntegerValueEx(extents[axis], true) : std::nullopt;
+      if (extent != shape[axis]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 constexpr unsigned kI16ElemBitWidth = 16;
 
 static LogicalResult verifyMGatherMScatterCoalesce(

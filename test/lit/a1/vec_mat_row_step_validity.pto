@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: sed 's/ addr = [^ ]*//g' %s > %t.pto
+// RUN: ptoas --pto-arch=a1 --pto-level=level1 %t.pto -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %t.pto -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --pto-level=level3 %s -o - | FileCheck %s
+// Constant allocation operands prove full extents before A1 normalization.
+// The final inserted row is 128 + 15 * 145 = 2303; columns 16..47 are in bounds.
+module attributes {pto.target_arch = "a1"} {
+  func.func @allocation_proven_insert() {
+    %source_rows = arith.constant 16 : index
+    %source_columns = arith.constant 32 : index
+    %target_rows = arith.constant 2304 : index
+    %target_columns = arith.constant 64 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %source_addr = arith.constant 0 : i64
+    %target_addr = arith.constant 512 : i64
+    %s = pto.alloc_tile addr = %source_addr valid_row = %source_rows valid_col = %source_columns : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile addr = %target_addr valid_row = %target_rows valid_col = %target_columns : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+  func.func @source_row_proven() {
+    %source_rows = arith.constant 16 : index
+    %target_columns = arith.constant 64 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %source_addr = arith.constant 0 : i64
+    %target_addr = arith.constant 512 : i64
+    %s = pto.alloc_tile addr = %source_addr valid_row = %source_rows : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile addr = %target_addr : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=?, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=64, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+
+  func.func @target_column_proven() {
+    %source_rows = arith.constant 16 : index
+    %target_columns = arith.constant 64 : index
+    %row = arith.constant 128 : index
+    %column = arith.constant 16 : index
+    %source_addr = arith.constant 0 : i64
+    %target_addr = arith.constant 512 : i64
+    %s = pto.alloc_tile addr = %source_addr : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile addr = %target_addr valid_col = %target_columns : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %row, %column : !pto.tile_buf<loc=vec, dtype=f16, rows=16, cols=32, v_row=16, v_col=32, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=64, v_row=2304, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 145 : i64}
+    return
+  }
+
+  // Explicit row_step permits compact RGB rows and an unaligned row origin.
+  func.func @rgb_allocation_proven() {
+    %three = arith.constant 3 : index
+    %sixteen = arith.constant 16 : index
+    %thirty_two = arith.constant 32 : index
+    %five = arith.constant 5 : index
+    %zero_addr = arith.constant 0 : i64
+    %s = pto.alloc_tile addr = %zero_addr valid_row = %three valid_col = %sixteen : !pto.tile_buf<loc=vec, dtype=f16, rows=3, cols=16, v_row=?, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %d = pto.alloc_tile addr = %zero_addr valid_row = %thirty_two valid_col = %thirty_two : !pto.tile_buf<loc=mat, dtype=f16, rows=32, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    pto.tinsert ins(%s, %five, %sixteen : !pto.tile_buf<loc=vec, dtype=f16, rows=3, cols=16, v_row=?, v_col=?, blayout=row_major, slayout=none_box, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=mat, dtype=f16, rows=32, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>) {row_step = 1 : i64}
+    return
+  }
+
+}
+// CHECK-LABEL: allocation_proven_insert
+// CHECK: TINSERT<145>(
+// CHECK-LABEL: source_row_proven
+// CHECK: TINSERT<145>(
+// CHECK-LABEL: target_column_proven
+// CHECK: TINSERT<145>(
+// CHECK-LABEL: rgb_allocation_proven
+// CHECK: TINSERT<1>(

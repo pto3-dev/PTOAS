@@ -62,8 +62,8 @@ while IFS=$'\t' read -r profile level values; do
     output_values=$((output_values + values))
     printf 'PASS profile%s %s: %s bitwise FP16 values, holes, guards and readonly GM\n' "$profile" "$level" "$values"
 done < "$rowstep_work/profiles.tsv"
-if [ "$profile_count" -ne 63 ]; then
-    printf 'Expected all 21 profiles at all three pipeline levels\n' >&2
+if [ "$profile_count" -ne 75 ]; then
+    printf 'Expected all 25 profiles at all three pipeline levels\n' >&2
     exit 1
 fi
 printf 'Row-step insertion: %s CPU/native profiles, %s FP16 values; no device operations.\n' \

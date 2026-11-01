@@ -21,7 +21,7 @@ static LogicalResult verifyTInsertA1RowStep(TInsertOp op, const TInsertCommon &c
   const auto sourceShape = source.getShape();
   const auto destinationShape = destination.getShape();
   const bool incomplete = sourceShape.size() != 2 || destinationShape.size() != 2 ||
-      source.getValidShape() != sourceShape || destination.getValidShape() != destinationShape ||
+      !hasA1FullTileShape(op.getSrc(), source) || !hasA1FullTileShape(op.getDst(), destination) ||
       source.getBLayoutValueI32() != static_cast<int32_t>(pto::BLayout::RowMajor) ||
       source.getSLayoutValueI32() != static_cast<int32_t>(pto::SLayout::NoneBox) ||
       destination.getBLayoutValueI32() != static_cast<int32_t>(pto::BLayout::ColMajor) ||
