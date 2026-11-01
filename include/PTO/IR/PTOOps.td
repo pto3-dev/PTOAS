@@ -4692,7 +4692,8 @@ def TInsertOp : PTO_TOp<"tinsert", [
     Optional<I64>:$preQuantScalar,
     OptionalAttr<PTO_AccToVecModeAttr>:$accToVecMode,
     DefaultValuedAttr<PTO_ReluPreModeAttr, "::mlir::pto::ReluPreMode::NoRelu">:$reluPreMode,
-    OptionalAttr<PTO_TInsertModeAttr>:$tinsertMode
+    OptionalAttr<PTO_TInsertModeAttr>:$tinsertMode,
+    OptionalAttr<I64Attr>:$row_step
   );
 
   let results = (outs);

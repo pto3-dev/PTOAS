@@ -13,6 +13,7 @@
 #include "PTO/IR/PTOLayoutUtils.h"
 #include "PTO/IR/PTOSyncUtils.h"
 #include "PTO/IR/PTOTypeUtils.h"
+#include "PTO/Support/A1Target.h"
 #include "mlir/Transforms/InliningUtils.h"
 
 // Explicit names shared by the PTO implementation fragments.

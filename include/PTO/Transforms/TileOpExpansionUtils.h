@@ -20,6 +20,13 @@ inline bool isTileLibExpandableOp(Operation *op) {
   if (!op || !isa<TileOpInterface>(op)) {
     return false;
   }
+  // Row-scatter is an A1 native ISA form. Rectangular TileLib templates
+  // cannot represent its sparse destination window.
+  if (auto insert = dyn_cast<TInsertOp>(op)) {
+    if (insert.getRowStepAttr()) {
+      return false;
+    }
+  }
   return !isa<TReshapeOp, TSyncOp, TAllocToAivOp, TAllocToAicOp,
               TPushToAivOp, TPushToAicOp, TPopFromAicOp, TPopFromAivOp,
               TFreeFromAicOp, TFreeFromAivOp>(op);

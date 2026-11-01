@@ -121,6 +121,10 @@ struct PTOInsertToEmitC : public OpConversionPattern<pto::TInsertOp> {
         op.getReluPreMode() != pto::ReluPreMode::NoRelu;
 
     templateArgs = ArrayAttr{};
+    if (auto rowStep = op.getRowStepAttr()) {
+      templateArgs = rewriter.getArrayAttr({emitc::OpaqueAttr::get(ctx, std::to_string(rowStep.getInt()))});
+      return success();
+    }
     if (tinsertModeAttr) {
       templateArgs = rewriter.getArrayAttr({emitc::OpaqueAttr::get(
           ctx, getTInsertModeToken(tinsertModeAttr.getValue()))});

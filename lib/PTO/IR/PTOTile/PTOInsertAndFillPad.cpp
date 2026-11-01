@@ -8,6 +8,45 @@
 
 // Included by PTO.cpp as part of the PTO IR implementation translation unit.
 
+static LogicalResult verifyTInsertA1RowStep(TInsertOp op, const TInsertCommon &common) {
+  auto step = op.getRowStepAttr();
+  if (!step) {
+    return success();
+  }
+  if (common.srcSpace != pto::AddressSpace::VEC || common.dstSpace != pto::AddressSpace::MAT) {
+    return op.emitOpError("A1 row-step insertion requires FP16 Vec-to-Mat operands");
+  }
+  const auto source = common.srcTb;
+  const auto destination = common.dstTb;
+  const auto sourceShape = source.getShape();
+  const auto destinationShape = destination.getShape();
+  const bool incomplete = sourceShape.size() != 2 || destinationShape.size() != 2 ||
+      source.getValidShape() != sourceShape || destination.getValidShape() != destinationShape ||
+      source.getBLayoutValueI32() != static_cast<int32_t>(pto::BLayout::RowMajor) ||
+      source.getSLayoutValueI32() != static_cast<int32_t>(pto::SLayout::NoneBox) ||
+      destination.getBLayoutValueI32() != static_cast<int32_t>(pto::BLayout::ColMajor) ||
+      destination.getSLayoutValueI32() != static_cast<int32_t>(pto::SLayout::RowMajor);
+  if (incomplete) {
+    return op.emitOpError("A1 row-step insertion requires full static ND source and NZ destination");
+  }
+  const auto sourceBytes = pto::getA1StaticTileBytes(
+      sourceShape[0], sourceShape[1], 2, pto::AddressSpace::VEC);
+  const auto destinationBytes = pto::getA1StaticTileBytes(
+      destinationShape[0], destinationShape[1], 2, pto::AddressSpace::MAT);
+  if (!sourceBytes || !destinationBytes) {
+    return op.emitOpError("A1 row-step insertion operands exceed their memory budget");
+  }
+  auto span = pto::getA1StridedInsertSpan(sourceShape[0], destinationShape[0], step.getInt());
+  if (!span) {
+    return op.emitOpError("A1 row_step must be in [1, 65536] and its complete source span must fit the destination");
+  }
+  const auto row = getConstantIntegerValueEx(op.getIndexRow(), true);
+  if (row && *row > destinationShape[0] - *span) {
+    return op.emitOpError("A1 row-step insertion exceeds the destination row span");
+  }
+  return success();
+}
+
 // A1 panel insertion uses MTE1 for Mat-to-Left, MTE3 for Vec-to-Mat,
 // and V for Vec-to-Vec, distinct from FIXPIPE insertion.
 static LogicalResult verifyTInsertA1(TInsertOp op) {
@@ -26,7 +65,7 @@ static LogicalResult verifyTInsertA1(TInsertOp op) {
   if (op.getFp() || op.getPreQuantScalar() || op.getAccToVecModeAttr() || op.getTinsertModeAttr() ||
       op.getReluPreMode() != pto::ReluPreMode::NoRelu)
     return op.emitOpError("A1 panel insertion does not support auxiliary operands or fused modes");
-  return success();
+  return verifyTInsertA1RowStep(op, c);
 }
 
 ::mlir::pto::PIPE mlir::pto::TInsertOp::getPipe() {
@@ -108,7 +147,12 @@ static LogicalResult verifyTInsertA5(TInsertOp op) {
 }
 
 mlir::LogicalResult mlir::pto::TInsertOp::verify() {
-  if (isTargetArchA1(getOperation())) return verifyTInsertA1(*this);
+  if (isTargetArchA1(getOperation())) {
+    return verifyTInsertA1(*this);
+  }
+  if (getRowStepAttr()) {
+    return emitOpError("row_step is supported only on the A1 Vec-to-Mat insertion path");
+  }
   auto verifyA2A3 = [this]() -> LogicalResult { return verifyTInsertA2A3(*this); };
   auto verifyA5 = [this]() -> LogicalResult { return verifyTInsertA5(*this); };
   return dispatchVerifierByArch(getOperation(), verifyA2A3, verifyA5);

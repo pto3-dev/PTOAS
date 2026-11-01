@@ -693,3 +693,25 @@ N16/N32 Right operands without a reload or extraction copy. Existing C16
 row intervals retain their original contract; partial-height multi-C16,
 dynamic-column and unsupported-layout views remain rejected. CPU/offline
 checks do not establish hardware overlap or throughput.
+
+
+### A1 row-strided resident panel insertion
+
+The existing `pto.tinsert` accepts an optional `row_step = 145 : i64` attribute
+on A1 FP16 ND Vec-to-NZ Mat writes. Source row `r` is written to logical target
+row `indexRow + r * row_step`; untouched rows and columns retain their previous
+values. The static step is in [1, 65536], columns and column offsets stay C16
+aligned, and the complete strided span must fit. RGB three-row payloads and
+non-C16 row origins are supported only by this explicit form. In particular,
+`row_step = 1` must remain distinct from an absent attribute: it lowers to
+`TINSERT<1>`, while the old rectangular form keeps its original checks and call.
+Other targets reject the attribute. A1 native lowering preserves MTE3 effects;
+rectangular TileLib templates do not expand this form.
+
+Resident Mat rows follow the 1 MiB L1 budget, admitting 2304/4608-row sparse
+panels and up to 32768 C16-wide rows. Columns and Cube operands retain their
+2048-dimension and L0 resource checks; im2col image constraints remain separate.
+The compiler proves both static and bounded-loop offsets without overflowing
+index sums or span products. Use the matching row-strided A1 PTO-ISA. CPU and
+offline compilation regressions validate transfer semantics, not device overlap
+or model performance.
