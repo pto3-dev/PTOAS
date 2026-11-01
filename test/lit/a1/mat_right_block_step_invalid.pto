@@ -6,6 +6,9 @@
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
 // RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/partial_alloc_target.pto -o %t/partial_alloc_target.cpp 2>&1 | FileCheck %s --check-prefix=VALIDITY
+// RUN: not ptoas --pto-arch=a1 %t/partial_alloc_source.pto -o %t/partial_alloc_source.cpp 2>&1 | FileCheck %s --check-prefix=VALIDITY
+// RUN: not ptoas --pto-arch=a1 %t/unproven_valid.pto -o %t/unproven_valid.cpp 2>&1 | FileCheck %s --check-prefix=VALIDITY
 // RUN: not ptoas --pto-arch=a1 %t/zero_step.pto -o %t/zero_step.cpp 2>&1 | FileCheck %s --check-prefix=NEG0
 // RUN: not ptoas --pto-arch=a1 %t/negative_step.pto -o %t/negative_step.cpp 2>&1 | FileCheck %s --check-prefix=NEG1
 // RUN: not ptoas --pto-arch=a1 %t/unsigned_overflow.pto -o %t/unsigned_overflow.cpp 2>&1 | FileCheck %s --check-prefix=NEG2
@@ -375,3 +378,56 @@ module attributes {pto.target_arch = "a1"} {
     return
   }
 }
+
+//--- unproven_valid.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @allocation_proven_full(%runtime_rows: index) {
+    %source_rows = arith.constant 2304 : index
+    %target_rows = arith.constant 144 : index
+    %columns = arith.constant 32 : index
+    %row = arith.constant 1776 : index
+    %zero = arith.constant 0 : index
+    %source_addr = arith.constant 512 : i64
+    %target_addr = arith.constant 0 : i64
+    %s = pto.alloc_tile addr = %source_addr valid_row = %runtime_rows valid_col = %columns : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    %d = pto.alloc_tile addr = %target_addr valid_row = %target_rows valid_col = %columns : !pto.tile_buf<loc=right, dtype=f16, rows=144, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=col_major, fractal=512, pad=0>
+    pto.textract ins(%s, %row, %zero : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=right, dtype=f16, rows=144, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=col_major, fractal=512, pad=0>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- partial_alloc_source.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @allocation_proven_full() {
+    %source_rows = arith.constant 2288 : index
+    %target_rows = arith.constant 144 : index
+    %columns = arith.constant 32 : index
+    %row = arith.constant 1776 : index
+    %zero = arith.constant 0 : index
+    %source_addr = arith.constant 512 : i64
+    %target_addr = arith.constant 0 : i64
+    %s = pto.alloc_tile addr = %source_addr valid_row = %source_rows valid_col = %columns : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    %d = pto.alloc_tile addr = %target_addr valid_row = %target_rows valid_col = %columns : !pto.tile_buf<loc=right, dtype=f16, rows=144, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=col_major, fractal=512, pad=0>
+    pto.textract ins(%s, %row, %zero : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=right, dtype=f16, rows=144, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=col_major, fractal=512, pad=0>) {block_step = 4 : i64}
+    return
+  }
+}
+
+//--- partial_alloc_target.pto
+module attributes {pto.target_arch = "a1"} {
+  func.func @allocation_proven_full() {
+    %source_rows = arith.constant 2304 : index
+    %target_rows = arith.constant 128 : index
+    %columns = arith.constant 32 : index
+    %row = arith.constant 1776 : index
+    %zero = arith.constant 0 : index
+    %source_addr = arith.constant 512 : i64
+    %target_addr = arith.constant 0 : i64
+    %s = pto.alloc_tile addr = %source_addr valid_row = %source_rows valid_col = %columns : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>
+    %d = pto.alloc_tile addr = %target_addr valid_row = %target_rows valid_col = %columns : !pto.tile_buf<loc=right, dtype=f16, rows=144, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=col_major, fractal=512, pad=0>
+    pto.textract ins(%s, %row, %zero : !pto.tile_buf<loc=mat, dtype=f16, rows=2304, cols=32, v_row=?, v_col=?, blayout=col_major, slayout=row_major, fractal=512, pad=0>, index, index) outs(%d : !pto.tile_buf<loc=right, dtype=f16, rows=144, cols=32, v_row=?, v_col=?, blayout=row_major, slayout=col_major, fractal=512, pad=0>) {block_step = 4 : i64}
+    return
+  }
+}
+
+// VALIDITY: A1 extraction requires full static NZ/ZZ Mat and N16/N32 ZN Right tiles

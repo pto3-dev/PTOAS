@@ -433,6 +433,38 @@ static LogicalResult verifyTExtractA5(TExtractOp op) {
   return success();
 }
 
+// PyPTO names constant full valid extents as allocation operands while its
+// tile descriptor keeps dynamic valid dimensions. Initial IR verification runs
+// before A1 normalization: prove exactly the same extents here without mutating
+// types or accepting a partial/unproven runtime shape.
+static bool hasA1FullExtractShape(Value value, TileBufType tile) {
+  const auto shape = tile.getShape();
+  const auto valid = tile.getValidShape();
+  if (valid == shape) {
+    return true;
+  }
+  auto allocation = value.getDefiningOp<AllocTileOp>();
+  const bool validRank = valid.size() == 2;
+  if (!allocation || !validRank) {
+    return false;
+  }
+  const Value extents[] = {allocation.getValidRow(), allocation.getValidCol()};
+  for (unsigned axis = 0; axis < 2; ++axis) {
+    const bool dynamic = ShapedType::isDynamic(valid[axis]);
+    if (!dynamic) {
+      if (valid[axis] != shape[axis]) {
+        return false;
+      }
+    } else {
+      const auto extent = extents[axis] ? getConstantIntegerValueEx(extents[axis], true) : std::nullopt;
+      if (extent != shape[axis]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 static LogicalResult verifyTExtractA1Storage(TExtractOp op, const TExtractCommon &common) {
   const auto source = common.srcTb;
   const auto target = common.dstTb;
@@ -440,7 +472,8 @@ static LogicalResult verifyTExtractA1Storage(TExtractOp op, const TExtractCommon
   const auto targetShape = target.getShape();
   const int32_t row = static_cast<int32_t>(pto::BLayout::RowMajor);
   const int32_t col = static_cast<int32_t>(pto::BLayout::ColMajor);
-  const bool complete = source.getValidShape() == sourceShape && target.getValidShape() == targetShape &&
+  const bool complete = hasA1FullExtractShape(op.getSrc(), source) &&
+      hasA1FullExtractShape(op.getDst(), target) &&
       source.getCompactModeI32() == 0 && target.getCompactModeI32() == 0;
   const bool layouts = (source.getBLayoutValueI32() == row || source.getBLayoutValueI32() == col) &&
       source.getSLayoutValueI32() == static_cast<int32_t>(pto::SLayout::RowMajor) &&
