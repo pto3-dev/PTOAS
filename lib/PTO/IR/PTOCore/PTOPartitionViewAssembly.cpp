@@ -144,11 +144,13 @@ static LogicalResult verifyInsertStaticBoundsCommon(
         return op.emitOpError("expects src and dst to be rank-2 tile_buf");
     }
     if (row && srcShape[0] != ShapedType::kDynamic && dstShape[0] != ShapedType::kDynamic &&
-        *row + srcShape[0] > dstShape[0]) {
+        (srcShape[0] < 0 || dstShape[0] < 0 || srcShape[0] > dstShape[0] ||
+         *row > dstShape[0] - srcShape[0])) {
         return op.emitOpError("expects indexRow + src.rows <= dst.rows");
     }
     if (col && srcShape[1] != ShapedType::kDynamic && dstShape[1] != ShapedType::kDynamic &&
-        *col + srcShape[1] > dstShape[1]) {
+        (srcShape[1] < 0 || dstShape[1] < 0 || srcShape[1] > dstShape[1] ||
+         *col > dstShape[1] - srcShape[1])) {
         return op.emitOpError("expects indexCol + src.cols <= dst.cols");
     }
     return success();

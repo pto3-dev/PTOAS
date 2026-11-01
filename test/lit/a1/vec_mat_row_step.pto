@@ -1,0 +1,46 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// RUN: pto-test-opt --pto-insert-template-attributes %s | FileCheck %s --check-prefix=KEEP
+module attributes {pto.target_arch = "a1"} {
+  func.func @rgb_step_one(%s: !pto.tile_buf<vec, 3x16xf16>, %d: !pto.tile_buf<mat, 32x32xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 5 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 3x16xf16>, index, index) outs(%d : !pto.tile_buf<mat, 32x32xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 1 : i64}
+    return
+  }
+  func.func @sparse_panel(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+  func.func @spmd_panel(%s: !pto.tile_buf<vec, 16x16xf16>, %d: !pto.tile_buf<mat, 4608x32xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %block = pto.get_block_idx
+    %id = arith.index_cast %block : i64 to index
+    %two = arith.constant 2 : index
+    %stripe = arith.constant 2304 : index
+    %origin = arith.constant 128 : index
+    %zero = arith.constant 0 : index
+    %group = arith.remui %id, %two : index
+    %base = arith.muli %group, %stripe : index
+    %row = arith.addi %base, %origin : index
+    pto.tinsert ins(%s, %row, %zero : !pto.tile_buf<vec, 16x16xf16>, index, index) outs(%d : !pto.tile_buf<mat, 4608x32xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+// CHECK-LABEL: rgb_step_one
+// CHECK: TINSERT<1>(
+// CHECK-LABEL: sparse_panel
+// CHECK: TINSERT<145>(
+// CHECK-LABEL: spmd_panel
+// CHECK: get_block_idx()
+// CHECK: TINSERT<145>(
+// KEEP: row_step = 1 : i64
+// KEEP: row_step = 145 : i64
+// KEEP-NOT: tilelib

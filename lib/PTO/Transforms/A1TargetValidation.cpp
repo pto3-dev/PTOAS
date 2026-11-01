@@ -328,15 +328,49 @@ bool acceptsIntegerStorage(Operation* op)
                func::FuncOp, func::ReturnOp, scf::ForOp, scf::IfOp, scf::YieldOp>(op);
 }
 
+LogicalResult validateA1VecMatInsertion(TInsertOp insert)
+{
+    const auto source = cast<TileBufType>(insert.getSrc().getType());
+    const auto destination = cast<TileBufType>(insert.getDst().getType());
+    const auto row = offsetFacts(insert.getIndexRow());
+    const auto column = offsetFacts(insert.getIndexCol());
+    const auto step = insert.getRowStepAttr();
+    const auto span = getA1StridedInsertSpan(source.getShape()[0], destination.getShape()[0],
+                                           step ? step.getInt() : 1);
+    constexpr int64_t c16 = 16;
+    const bool invalidLayout = !source.getElementType().isF16() || !destination.getElementType().isF16() ||
+        source.getBLayoutValueI32() != static_cast<int32_t>(BLayout::RowMajor) ||
+        destination.getBLayoutValueI32() != static_cast<int32_t>(BLayout::ColMajor) ||
+        destination.getSLayoutValueI32() != static_cast<int32_t>(SLayout::RowMajor) ||
+        source.getShape()[1] % c16 || source.getShape()[1] > destination.getShape()[1];
+    bool invalidSpan = !span;
+    if (span) {
+        invalidSpan = (!step && (source.getShape()[0] % c16 || row.multiple % c16)) ||
+            row.lower < 0 || column.lower < 0 || column.multiple % c16 ||
+            row.upper > destination.getShape()[0] - *span ||
+            column.upper > destination.getShape()[1] - source.getShape()[1];
+    }
+    if (invalidLayout || invalidSpan) {
+        return insert.emitOpError(step ? "A1 row-step insertion requires a bounded complete FP16 ND to NZ span."
+                                      : "A1 Vec-to-Mat insertion requires bounded aligned FP16 ND to NZ panels.");
+    }
+    return success();
+}
+
 LogicalResult validateTile(Operation* op, TileBufType tile)
 {
     auto shape = tile.getShape();
     auto space = dyn_cast_or_null<AddressSpaceAttr>(tile.getMemorySpace());
     if (space && space.getAddressSpace() != AddressSpace::VEC) {
         const auto location = space.getAddressSpace();
-        if (shape.size() != 2 || shape[0] < 16 || shape[0] > 2048 || shape[0] % 16 || shape[1] < 16 ||
-            shape[1] > 2048 || shape[1] % 16 || tile.getValidShape() != shape || tile.getCompactModeI32() != 0)
-            return op->emitError("A1 matrix lowering requires full aligned dimensions in [16, 2048].");
+        const bool invalidShape = shape.size() != 2 || shape[0] < 16 ||
+            (location != AddressSpace::MAT && shape[0] > 2048) || shape[0] % 16 ||
+            shape[1] < 16 || shape[1] > 2048 || shape[1] % 16 ||
+            tile.getValidShape() != shape || tile.getCompactModeI32() != 0;
+        if (invalidShape) {
+            return op->emitError(
+                "A1 matrix lowering requires full aligned dimensions; only resident Mat rows may exceed 2048.");
+        }
         if (location == AddressSpace::LEFT && tile.getBLayoutValueI32() == static_cast<int32_t>(BLayout::ColMajor) &&
             shape[1] != 16)
             return op->emitError(
@@ -344,9 +378,12 @@ LogicalResult validateTile(Operation* op, TileBufType tile)
         if ((location == AddressSpace::RIGHT || location == AddressSpace::ACC) && shape[1] != 16 && shape[1] != 32)
             return op->emitError("A1 multi-K GEMM requires N16 or N32 Right and Acc tiles.");
         const auto spec = getA1MemorySpec(location);
-        const uint64_t bytes = static_cast<uint64_t>(shape[0]) * shape[1] * vectorElementBytes(tile.getElementType());
-        if (bytes > spec.capacityBytes)
+        const auto boundedBytes = getA1StaticTileBytes(
+            shape[0], shape[1], vectorElementBytes(tile.getElementType()), location);
+        if (!boundedBytes) {
             return op->emitError("A1 matrix tile exceeds its memory budget.");
+        }
+        const uint64_t bytes = *boundedBytes;
         const auto row = static_cast<int32_t>(BLayout::RowMajor);
         const auto col = static_cast<int32_t>(BLayout::ColMajor);
         const auto innerRow = static_cast<int32_t>(SLayout::RowMajor);
@@ -1073,17 +1110,9 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 }
             } else if (locationOf(insert.getSrc()) == AddressSpace::VEC &&
                        locationOf(insert.getDst()) == AddressSpace::MAT) {
-                const auto colMajor = static_cast<int32_t>(BLayout::ColMajor);
-                const auto innerRow = static_cast<int32_t>(SLayout::RowMajor);
-                if (!source.getElementType().isF16() || !destination.getElementType().isF16() ||
-                    source.getBLayoutValueI32() != static_cast<int32_t>(BLayout::RowMajor) ||
-                    destination.getBLayoutValueI32() != colMajor || destination.getSLayoutValueI32() != innerRow ||
-                    source.getShape()[0] % 16 || source.getShape()[1] % 16 ||
-                    source.getShape()[0] > destination.getShape()[0] || source.getShape()[1] > destination.getShape()[1] ||
-                    row.lower < 0 || column.lower < 0 || row.multiple % 16 || column.multiple % 16 ||
-                    row.upper > destination.getShape()[0] - source.getShape()[0] ||
-                    column.upper > destination.getShape()[1] - source.getShape()[1])
-                    return reject("A1 Vec-to-Mat insertion requires bounded aligned FP16 ND to NZ panels.");
+                if (failed(validateA1VecMatInsertion(insert))) {
+                    return WalkResult::interrupt();
+                }
             } else {
                 if (locationOf(insert.getSrc()) != AddressSpace::MAT || locationOf(insert.getDst()) != AddressSpace::LEFT ||
                     source.getShape()[1] != 16 || !source.getElementType().isF16() || !destination.getElementType().isF16())

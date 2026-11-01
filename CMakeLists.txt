@@ -298,6 +298,15 @@ if(BUILD_TESTING)
       ENVIRONMENT "${_pto_python_test_env}"
     )
     add_test(
+      NAME pto_a1_strided_insert_bindings
+      COMMAND "${Python3_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/test/python/a1_strided_insert_bindings.py"
+    )
+    set_tests_properties(pto_a1_strided_insert_bindings PROPERTIES
+      LABELS "PTO"
+      ENVIRONMENT "${_pto_python_test_env}"
+    )
+    add_test(
       NAME pto_img2col_mat_source_bindings
       COMMAND "${Python3_EXECUTABLE}"
               "${CMAKE_CURRENT_SOURCE_DIR}/test/python/img2col_mat_source_bindings.py"

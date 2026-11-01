@@ -1,0 +1,258 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+// RUN: split-file %s %t
+// RUN: not ptoas --pto-arch=a1 %t/source_ub_budget.pto -o %t/source_ub_budget.cpp 2>&1 | FileCheck %s --check-prefix=UB
+// RUN: not ptoas --pto-arch=a1 %t/l0_rows.pto -o %t/l0_rows.cpp 2>&1 | FileCheck %s --check-prefix=L0
+// RUN: not ptoas --pto-arch=a1 %t/case0.pto -o %t/case0.cpp 2>&1 | FileCheck %s --check-prefix=NEG0
+// RUN: not ptoas --pto-arch=a1 %t/case1.pto -o %t/case1.cpp 2>&1 | FileCheck %s --check-prefix=NEG1
+// RUN: not ptoas --pto-arch=a1 %t/case2.pto -o %t/case2.cpp 2>&1 | FileCheck %s --check-prefix=NEG2
+// RUN: not ptoas --pto-arch=a1 %t/case3.pto -o %t/case3.cpp 2>&1 | FileCheck %s --check-prefix=NEG3
+// RUN: not ptoas --pto-arch=a1 %t/case4.pto -o %t/case4.cpp 2>&1 | FileCheck %s --check-prefix=NEG4
+// RUN: not ptoas --pto-arch=a1 %t/case5.pto -o %t/case5.cpp 2>&1 | FileCheck %s --check-prefix=NEG5
+// RUN: not ptoas --pto-arch=a1 %t/case6.pto -o %t/case6.cpp 2>&1 | FileCheck %s --check-prefix=NEG6
+// RUN: not ptoas --pto-arch=a1 %t/case7.pto -o %t/case7.cpp 2>&1 | FileCheck %s --check-prefix=NEG7
+// RUN: not ptoas --pto-arch=a1 %t/case8.pto -o %t/case8.cpp 2>&1 | FileCheck %s --check-prefix=NEG8
+// RUN: not ptoas --pto-arch=a1 %t/case9.pto -o %t/case9.cpp 2>&1 | FileCheck %s --check-prefix=NEG9
+// RUN: not ptoas --pto-arch=a1 %t/case10.pto -o %t/case10.cpp 2>&1 | FileCheck %s --check-prefix=NEG10
+// RUN: not ptoas --pto-arch=a1 %t/case11.pto -o %t/case11.cpp 2>&1 | FileCheck %s --check-prefix=NEG11
+// RUN: not ptoas --pto-arch=a1 %t/case12.pto -o %t/case12.cpp 2>&1 | FileCheck %s --check-prefix=NEG12
+// RUN: not ptoas --pto-arch=a1 %t/case13.pto -o %t/case13.cpp 2>&1 | FileCheck %s --check-prefix=NEG13
+// RUN: not ptoas --pto-arch=a1 %t/case14.pto -o %t/case14.cpp 2>&1 | FileCheck %s --check-prefix=NEG14
+// RUN: not ptoas --pto-arch=a3 %t/case15.pto -o %t/case15.cpp 2>&1 | FileCheck %s --check-prefix=NEG15
+// RUN: not ptoas --pto-arch=a5 %t/case16.pto -o %t/case16.cpp 2>&1 | FileCheck %s --check-prefix=NEG16
+// RUN: not ptoas --pto-arch=a1 %t/case17.pto -o %t/case17.cpp 2>&1 | FileCheck %s --check-prefix=NEG17
+// RUN: not ptoas --pto-arch=a1 %t/case18.pto -o %t/case18.cpp 2>&1 | FileCheck %s --check-prefix=NEG18
+
+//--- case0.pto
+// NEG0: expects indexRow to be non-negative
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant -1 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case1.pto
+// NEG1: expects indexCol to be non-negative
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant -1 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case2.pto
+// NEG2: row_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 0 : i64}
+    return
+  }
+}
+
+//--- case3.pto
+// NEG3: row_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = -1 : i64}
+    return
+  }
+}
+
+//--- case4.pto
+// NEG4: row_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 65537 : i64}
+    return
+  }
+}
+
+//--- case5.pto
+// NEG5: row_step must be in
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 9223372036854775807 : i64}
+    return
+  }
+}
+
+//--- case6.pto
+// NEG6: complete source span
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 17x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 17x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case7.pto
+// NEG7: destination row span
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 129 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case8.pto
+// NEG8: bounded complete FP16
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 1 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case9.pto
+// NEG9: bounded complete FP16
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>, %row: index) {
+
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case10.pto
+// NEG10: bounded aligned FP16
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 3x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 3x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- case11.pto
+// NEG11: expects indexRow
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 9223372036854775807 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case12.pto
+// NEG12: expects indexCol
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 9223372036854775807 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case13.pto
+// NEG13: expects indexRow
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 9223372036854775807 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- case14.pto
+// NEG14: expects indexCol
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 9223372036854775807 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>)
+    return
+  }
+}
+
+//--- case15.pto
+// NEG15: supported only on the A1
+module attributes {pto.target_arch = "a3"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case16.pto
+// NEG16: supported only on the A1
+module attributes {pto.target_arch = "a5"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x32xf16>, %d: !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 16 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x32xf16>, index, index) outs(%d : !pto.tile_buf<mat, 2304x64xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case17.pto
+// NEG17: memory budget
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x16xf16>, %d: !pto.tile_buf<mat, 32784x16xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 0 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x16xf16>, index, index) outs(%d : !pto.tile_buf<mat, 32784x16xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- case18.pto
+// NEG18: memory budget
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid(%s: !pto.tile_buf<vec, 16x16xf16>, %d: !pto.tile_buf<mat, 4611686018427387904x16xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %row = arith.constant 128 : index
+    %col = arith.constant 0 : index
+    pto.tinsert ins(%s, %row, %col : !pto.tile_buf<vec, 16x16xf16>, index, index) outs(%d : !pto.tile_buf<mat, 4611686018427387904x16xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 145 : i64}
+    return
+  }
+}
+
+//--- source_ub_budget.pto
+// UB: operands exceed their memory budget
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid_source_budget(%s: !pto.tile_buf<vec, 4097x16xf16>, %d: !pto.tile_buf<mat, 8192x16xf16, blayout=col_major, slayout=row_major, fractal=512>) {
+    %zero = arith.constant 0 : index
+    pto.tinsert ins(%s, %zero, %zero : !pto.tile_buf<vec, 4097x16xf16>, index, index) outs(%d : !pto.tile_buf<mat, 8192x16xf16, blayout=col_major, slayout=row_major, fractal=512>) {row_step = 1 : i64}
+    return
+  }
+}
+
+//--- l0_rows.pto
+// L0: only resident Mat rows may exceed 2048
+module attributes {pto.target_arch = "a1"} {
+  func.func @invalid_l0_rows(%s: !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>, %d: !pto.tile_buf<left, 2304x16xf16, blayout=row_major, slayout=row_major, fractal=512>) {
+    %zero = arith.constant 0 : index
+    pto.tinsert ins(%s, %zero, %zero : !pto.tile_buf<mat, 16x16xf16, blayout=col_major, slayout=row_major, fractal=512>, index, index) outs(%d : !pto.tile_buf<left, 2304x16xf16, blayout=row_major, slayout=row_major, fractal=512>)
+    return
+  }
+}

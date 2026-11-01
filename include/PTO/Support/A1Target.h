@@ -11,6 +11,7 @@
 
 #include "PTO/IR/PTO.h"
 #include <cstdint>
+#include <optional>
 
 namespace mlir::pto {
 
@@ -40,6 +41,44 @@ inline A1MemorySpec getA1MemorySpec(AddressSpace space)
         default:
             return {0, 1};
     }
+}
+
+// Prove the target-specific capacity before multiplying external dimensions.
+inline std::optional<uint64_t> getA1StaticTileBytes(int64_t rows, int64_t columns,
+                                                 unsigned elementBytes, AddressSpace space)
+{
+    if (rows <= 0 || columns <= 0 || elementBytes == 0) {
+        return std::nullopt;
+    }
+    const uint64_t maxElements = getA1MemorySpec(space).capacityBytes / elementBytes;
+    const uint64_t width = static_cast<uint64_t>(columns);
+    if (width > maxElements) {
+        return std::nullopt;
+    }
+    const uint64_t maxRows = maxElements / width;
+    const uint64_t height = static_cast<uint64_t>(rows);
+    if (height > maxRows) {
+        return std::nullopt;
+    }
+    return height * width * elementBytes;
+}
+
+// A source C16 row writes one 32-byte destination block. The DMA gap
+// field is 16 bits, so the maximum logical row step is one greater.
+inline constexpr int64_t kA1MaxInsertionRowStep = 65536;
+inline std::optional<int64_t> getA1StridedInsertSpan(int64_t sourceRows, int64_t destinationRows,
+                                                 int64_t rowStep)
+{
+    if (sourceRows <= 0 || destinationRows <= 0 || rowStep <= 0 || rowStep > kA1MaxInsertionRowStep) {
+        return std::nullopt;
+    }
+    // Prove the product bounded before multiplying; malformed IR may carry
+    // arbitrary signed 64-bit dimensions or attributes.
+    const int64_t maxSourceRowsMinusOne = (destinationRows - 1) / rowStep;
+    if (sourceRows - 1 > maxSourceRowsMinusOne) {
+        return std::nullopt;
+    }
+    return (sourceRows - 1) * rowStep + 1;
 }
 
 // Materialize full valid shapes only when both allocation operands prove them.
