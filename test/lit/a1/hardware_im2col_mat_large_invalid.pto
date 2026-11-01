@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: not ptoas --pto-arch=a1 --pto-level=level3 %s -o /dev/null 2>&1 | FileCheck %s
+// CHECK: Mat image exceeds the A1 1 MiB L1 capacity
+#cfg = #pto.conv_tile_config<fmap_h=1, fmap_w=32784, pad_list=0x0x0x0, filter_h=1, filter_w=1, dilation_h=1, dilation_w=1, stride_h=1, stride_w=1, pad_value=0 : i32, channel_size=16, repeat_stride=0, repeat_time=1, repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>
+module attributes {pto.target_arch = "a1"} {
+  func.func @oversized_image() {
+    %zero = arith.constant 0 : index
+    %image = pto.alloc_tile : !pto.tile_buf<mat, 32784x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    %left = pto.alloc_tile : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>
+    pto.timg2col %left, %image, pos_m = %zero, pos_k = %zero {fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #cfg} : !pto.tile_buf<left, 16x16xf16, blayout=row_major, slayout=row_major, fractal=512>, !pto.tile_buf<mat, 32784x16xf16, blayout=col_major, slayout=row_major, fractal=512>
+    return
+  }
+}

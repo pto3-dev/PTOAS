@@ -162,9 +162,10 @@ static LogicalResult verifyTImg2colMatSource(TImg2colOp op) {
   }
   const auto shape = source.getShape();
   const auto space = getPTOMemorySpaceEnum(source);
-  const bool alignedShape = shape.size() == 2 && llvm::all_of(shape, [](int64_t dim) {
-    return dim >= 16 && dim <= 2048 && dim % 16 == 0;
-  });
+  // The flattened spatial dimension belongs to resident L1, not L0. In
+  // particular, 640-wide halo bands exceed 2048 pixels without exceeding L1.
+  const bool alignedShape = shape.size() == 2 && shape[0] >= 16 && shape[0] % 16 == 0 &&
+      shape[1] >= 16 && shape[1] <= 2048 && shape[1] % 16 == 0;
   const bool nzLayout =
       source.getBLayoutValueI32() == static_cast<int32_t>(pto::BLayout::ColMajor) &&
       source.getSLayoutValueI32() == static_cast<int32_t>(pto::SLayout::RowMajor) &&
@@ -173,6 +174,11 @@ static LogicalResult verifyTImg2colMatSource(TImg2colOp op) {
                              alignedShape && source.getValidShape() == shape && nzLayout;
   if (!completeImage) {
     return op.emitOpError("Mat image requires a complete aligned FP16 NZ Mat tile");
+  }
+  // Bound before multiplying, including malformed large signed IR extents.
+  constexpr int64_t l1Bytes = 1024 * 1024;
+  if (shape[0] > l1Bytes / 2 / shape[1]) {
+    return op.emitOpError("Mat image exceeds the A1 1 MiB L1 capacity");
   }
   const auto config = op.getConfig();
   const bool matchingGeometry = config && config->getFmapH().getInt() > 0 && config->getFmapW().getInt() > 0 &&

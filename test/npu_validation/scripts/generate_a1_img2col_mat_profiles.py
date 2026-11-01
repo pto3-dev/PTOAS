@@ -86,6 +86,25 @@ PROFILES = (
     Profile("ub_two_live_images", images=2, sum_images=True, ub_stage=True),
     Profile("k2048_many_c16", c=256, k=2048, k0=256),
     Profile("c2048_last_plane", c=2048, k=16, k0=18416, omit_m=True),
+    Profile(
+        "large_spatial_band", h=6, w=640, c=16, rows=128, k=144, m0=288, sh=2, sw=2
+    ),
+    # Leave exactly one 512-byte RHS Mat beside the resident image.
+    Profile(
+        "large_spatial_l1_boundary",
+        h=1,
+        w=32752,
+        c=16,
+        rows=16,
+        k=16,
+        m0=32736,
+        kh=1,
+        kw=1,
+        pl=0,
+        pr=0,
+        pt=0,
+        pb=0,
+    ),
 )
 
 
@@ -216,6 +235,17 @@ FILTER_PROFILES = (
         ),
         Profile("ordered_one_tap", k=16, k0=144, filter_order=(8,)),
         Profile("ordered_m2048", h=32, w=64, c=16, rows=2048, k=16, filter_order=(8,)),
+        Profile(
+            "ordered_large_spatial_band",
+            h=5,
+            w=640,
+            c=32,
+            rows=64,
+            k=96,
+            m0=640,
+            k0=144,
+            filter_order=(0, 4, 8, 3, 7, 2),
+        ),
     )
 )
 ALL_PROFILES = PROFILES + FILTER_PROFILES
