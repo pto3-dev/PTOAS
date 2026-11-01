@@ -232,6 +232,40 @@ LogicalResult validateConvTransfer(TLoadOp load, ConvTileBufType image)
     return success();
 }
 
+// V1 interprets K as an original-kernel C16 group even when only a subset
+// of filter taps is written. Prove that group and all signed coordinates
+// before narrowing offsets in EmitC or calling the native instruction.
+LogicalResult validateImg2colFilterOrder(TImg2colOp op, ConvTileConfigAttr config,
+                                       ArrayRef<int64_t> shape, const OffsetFacts &k)
+{
+    auto order = op.getFilterOrderAttr();
+    if (!order) {
+        return success();
+    }
+    const int64_t fh = config.getFilterH().getInt();
+    const int64_t fw = config.getFilterW().getInt();
+    const int64_t groupK = fh * fw * 16;
+    const int64_t reduction = shape[1] * groupK;
+    if (k.lower < 0 || k.upper > reduction - groupK || k.multiple % groupK) {
+        return op.emitError("A1 filter_order requires bounded K aligned to a complete original filter group.");
+    }
+    for (int64_t tap : order.asArrayRef()) {
+        if (tap >= fh * fw) {
+            return op.emitError("A1 filter_order tap is outside the configured filter geometry.");
+        }
+    }
+    const auto padding = config.getPadList();
+    const int64_t sh = config.getStrideH().getInt();
+    const int64_t sw = config.getStrideW().getInt();
+    const int64_t spanH = shape[2] + padding[2] + padding[3] - config.getDilationH().getInt() * (fh - 1) - 1;
+    const int64_t spanW = shape[3] + padding[0] + padding[1] - config.getDilationW().getInt() * (fw - 1) - 1;
+    if (shape[2] > 32767 || shape[3] > 32767 ||
+        spanH / sh * sh - padding[2] > 32767 || spanW / sw * sw - padding[0] > 32767) {
+        return op.emitError("A1 filter_order requires signed 16-bit image and output starting coordinates.");
+    }
+    return success();
+}
+
 LogicalResult validateImg2col(TImg2colOp op)
 {
     auto left = cast<TileBufType>(op.getDst().getType());
@@ -280,7 +314,7 @@ LogicalResult validateImg2col(TImg2colOp op)
         size[0] > outPixels || m.upper > outPixels - size[0] ||
         size[1] > reduction || k.upper > reduction - size[1])
         return op.emitError("A1 im2col requires bounded M and aligned bounded K windows.");
-    return success();
+    return validateImg2colFilterOrder(op, config, shape, k);
 }
 
 // Integer tiles are raw DMA/gather/sort-index storage, not arithmetic operands. Only tested

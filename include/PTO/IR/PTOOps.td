@@ -1847,6 +1847,10 @@ def TImg2colOp : PTO_Op<"timg2col", [
     complete FP16 NZ Mat tile may instead provide the same NC1HWC0 bytes with
     an explicit config attribute. This form reads the original Mat allocation;
     the native ConvTile descriptor aliases its pointer without another buffer.
+    On A1, optional filter_order selects 1..127 unique spatial filter taps in
+    the given order. Each tap contributes 16 columns to the complete Left
+    result; posK selects an aligned original-kernel C16 group, not a packed
+    output offset. Omission preserves the contiguous V2 operation.
   }];
   let arguments = (ins
     TileBufType:$dst,
@@ -1856,13 +1860,14 @@ def TImg2colOp : PTO_Op<"timg2col", [
     Optional<Index>:$posM,
     Optional<Index>:$posK,
     DefaultValuedAttr<PTO_FmatrixModeAttr, "::mlir::pto::FmatrixMode::FMATRIX_A_MANUAL">:$fmatrixMode,
-    OptionalAttr<ConvTileConfigAttr>:$config
+    OptionalAttr<ConvTileConfigAttr>:$config,
+    OptionalAttr<DenseI64ArrayAttr>:$filter_order
   );
   let results = (outs);
   let hasVerifier = 1;
   let assemblyFormat = [{
     $dst `,` $src `` custom<Img2colPositions>($posM, $posK)
-      attr-dict `:` qualified(type($dst)) `,` qualified(type($src))
+      (`filter_order` `=` $filter_order^)? attr-dict `:` qualified(type($dst)) `,` qualified(type($src))
   }];
 
   let extraClassDeclaration = [{

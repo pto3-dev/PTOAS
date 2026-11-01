@@ -580,6 +580,28 @@ Level1/level2 plan Mat addresses, while level3 accepts already-planned addresses
 The legacy ConvTile source remains supported with configuration on its
 allocation; an operation-level config is rejected for that source form.
 See [the Mat-source regression](test/lit/a1/hardware_im2col_mat.pto).
+
+A1 `pto.timg2col` also accepts an optional `filter_order = [...]`
+keyword before its attribute dictionary. It selects 1–127 distinct spatial taps
+in the specified order and writes a complete Left tile with `16 * count` columns.
+For example, `filter_order = [0, 4, 8, 3, 7, 2]` packs six taps of a
+3×3 filter into K96. `pos_k` still selects an original C16 filter group, so it
+must be a bounded multiple of `filter_h * filter_w * 16`; it is not a packed
+column offset. Mat and allocated ConvTile sources retain their original L1
+allocation and synchronization. The target also checks filter indices, image
+bounds and V1 signed coordinates. Other targets reject the selection explicitly.
+Omitting the keyword retains the existing contiguous V2 path.
+
+This form requires matching ISA support from `pto-isa` commit
+`7692f41d534bfd1555df32fa5413dc0c427871d9` or a descendant. See the
+[ordered-filter regression](test/lit/a1/hardware_im2col_filter_order.pto).
+The driver-free CPU/native test accepts `filter_order` or `all` as its optional
+profile-set argument; the default remains the existing Mat-source profiles.
+CPU static and runtime memory limits match the A1 compiler profile: 1 MiB L1,
+128 KiB UB, 64 KiB L0A/L0B and 256 KiB L0C. This uses the generic CPU
+simulator's existing size settings; no native memory limit is enlarged.
+These checks do not establish device performance or whole-model acceptance.
+
 The driver-free `test/npu_validation/scripts/test_a1_img2col_mat_host.sh`
 checks guarded bitwise CPU results and `dav-m200` compilation across the three
 pipeline levels. These checks do not establish device concurrency or timing.

@@ -39,6 +39,8 @@ class Profile:
     sum_images: bool = False
     ub_stage: bool = False
     omit_m: bool = False
+    filter_order: tuple[int, ...] | None = None
+    conv_source: bool = False
 
     def macros(self) -> list[str]:
         names = (
@@ -61,9 +63,14 @@ class Profile:
             "pb",
             "images",
         )
-        return [f"-DIMG_{name.upper()}={getattr(self, name)}" for name in names] + [
-            f"-DIMG_SUM={int(self.sum_images)}"
-        ]
+        definitions = [
+            f"-DIMG_{name.upper()}={getattr(self, name)}" for name in names
+        ] + [f"-DIMG_SUM={int(self.sum_images)}"]
+        if self.filter_order is not None:
+            definitions.append(
+                "-DIMG_FILTER_ORDER=" + ",".join(map(str, self.filter_order))
+            )
+        return definitions
 
 
 PROFILES = (
@@ -80,6 +87,138 @@ PROFILES = (
     Profile("k2048_many_c16", c=256, k=2048, k0=256),
     Profile("c2048_last_plane", c=2048, k=16, k0=18416, omit_m=True),
 )
+
+
+FILTER_PROFILES = (
+    tuple(
+        Profile(
+            f"phase_{phase}",
+            k=144,
+            k0=144 if phase == 1 else 0,
+            filter_order=tuple((phase + 4 * tap) % 9 for tap in range(9)),
+        )
+        for phase in range(4)
+    )
+    + tuple(
+        Profile(
+            f"rgb_phase_{phase}",
+            h=3,
+            w=640,
+            c=16,
+            rows=128,
+            k=96,
+            sh=2,
+            sw=2,
+            filter_order=tuple((phase + 4 * tap) % 9 for tap in range(6)),
+        )
+        for phase in range(4)
+    )
+    + (
+        Profile(
+            "rgb_tail",
+            h=3,
+            w=640,
+            c=16,
+            rows=128,
+            k=48,
+            sh=2,
+            sw=2,
+            filter_order=(6, 7, 8),
+        ),
+        Profile("third_c16", c=48, k=96, k0=288, filter_order=(0, 4, 8, 3, 7, 2)),
+        Profile(
+            "ordered_m224",
+            h=3,
+            w=640,
+            rows=224,
+            k=144,
+            m0=640,
+            k0=144,
+            filter_order=(1, 5, 0, 4, 8, 3, 7, 2, 6),
+        ),
+        Profile(
+            "ordered_m112",
+            h=3,
+            w=640,
+            rows=112,
+            k=144,
+            m0=640,
+            filter_order=(2, 6, 1, 5, 0, 4, 8, 3, 7),
+        ),
+        Profile(
+            "ordered_c256",
+            h=3,
+            w=640,
+            c=256,
+            rows=64,
+            k=144,
+            m0=640,
+            k0=2160,
+            filter_order=(3, 7, 2, 6, 1, 5, 0, 4, 8),
+        ),
+        Profile(
+            "ordered_asymmetric",
+            w=8,
+            c=16,
+            k=48,
+            kh=2,
+            sw=2,
+            pr=2,
+            pt=0,
+            filter_order=(5, 1, 3),
+        ),
+        Profile(
+            "ordered_five_reloads", images=5, k=96, filter_order=(0, 4, 8, 3, 7, 2)
+        ),
+        Profile(
+            "ordered_two_live_images",
+            images=2,
+            sum_images=True,
+            k=144,
+            filter_order=(2, 6, 1, 5, 0, 4, 8, 3, 7),
+        ),
+        Profile(
+            "ordered_ub_five_reloads",
+            images=5,
+            ub_stage=True,
+            k=96,
+            k0=144,
+            filter_order=(3, 7, 2, 6, 1, 5),
+        ),
+        Profile(
+            "ordered_ub_two_live_images",
+            images=2,
+            sum_images=True,
+            ub_stage=True,
+            k=144,
+            filter_order=(1, 5, 0, 4, 8, 3, 7, 2, 6),
+        ),
+        Profile(
+            "ordered_conv_source",
+            k=96,
+            k0=144,
+            conv_source=True,
+            filter_order=(0, 4, 8, 3, 7, 2),
+        ),
+        Profile(
+            "ordered_max_taps",
+            h=16,
+            w=128,
+            c=16,
+            k=2032,
+            kh=1,
+            kw=127,
+            pl=0,
+            pr=0,
+            pt=0,
+            pb=0,
+            filter_order=tuple(range(127)),
+        ),
+        Profile("ordered_one_tap", k=16, k0=144, filter_order=(8,)),
+        Profile("ordered_m2048", h=32, w=64, c=16, rows=2048, k=16, filter_order=(8,)),
+    )
+)
+ALL_PROFILES = PROFILES + FILTER_PROFILES
 
 
 def tile(location: str, rows: int, columns: int, element: str = "f16") -> str:
@@ -99,6 +238,8 @@ def tile(location: str, rows: int, columns: int, element: str = "f16") -> str:
 
 
 def make_program(p: Profile, explicit: bool) -> str:
+    conv_layout = "#pto.conv_layout<nc1hwc0>"
+    conv_view = f"!pto.tensor_view<?x?x?x?x?xf16, {conv_layout}>"
     pixels = p.h * p.w
     outputs = p.rows * (1 if p.sum_images else p.images)
     count = 2 if p.sum_images else 1
@@ -112,6 +253,11 @@ def make_program(p: Profile, explicit: bool) -> str:
         "acc": tile("acc", p.rows, 16, "f32"),
         "result": tile("vec", p.rows, 16, "f32"),
     }
+    if p.conv_source:
+        shape["image"] = (
+            f"!pto.conv_tile_buf<mat, 1x{p.c // 16}x{p.h}x{p.w}x16xf16, "
+            "layout=#pto.conv_layout<nc1hwc0>>"
+        )
     shape["image_second"] = shape["image"]
     shape["left_second"] = shape["left"]
     buffers = ["image", "weights", "left", "right", "acc", "result"]
@@ -148,6 +294,7 @@ def make_program(p: Profile, explicit: bool) -> str:
             p.images,
             pixels * p.images,
             outputs,
+            *([p.c // 16, p.h, p.w, p.w * p.c, pixels * p.c] if p.conv_source else []),
         }
     )
     if p.ub_stage:
@@ -158,12 +305,24 @@ def make_program(p: Profile, explicit: bool) -> str:
         if explicit:
             lines.append(f"    %addr_{name} = arith.constant {addresses[name]} : i64")
             address = f" addr = %addr_{name}"
-        lines.append(f"    %{name} = pto.alloc_tile{address} : {shape[name]}")
+        config = (
+            " {config = #image_config}"
+            if p.conv_source and name.startswith("image")
+            else ""
+        )
+        lines.append(f"    %{name} = pto.alloc_tile{address}{config} : {shape[name]}")
     for name, pointer, height, width in (
         ("iv", "input", pixels * p.images, p.c),
         ("wv", "weight", p.k, 16),
         ("ov", "out", outputs, 16),
     ):
+        if name == "iv" and p.conv_source:
+            lines.append(
+                f"    %iv = pto.make_tensor_view %input, shape = [%c{p.images}, %c{p.c // 16}, "
+                f"%c{p.h}, %c{p.w}, %c16], strides = [%c{pixels * p.c}, %c16, %c{p.w * p.c}, "
+                f"%c{p.c}, %c1] : {conv_view}"
+            )
+            continue
         lines.append(
             f"    %{name} = pto.make_tensor_view %{pointer}, shape = [%c{height}, %c{width}], "
             f"strides = [%c{width}, %c1] : !pto.tensor_view<?x?x{'f32' if name == 'ov' else 'f16'}>"
@@ -184,6 +343,19 @@ def make_program(p: Profile, explicit: bool) -> str:
     for image in range(count):
         suffix = "" if image == 0 else "_second"
         offset = "%input_offset" if loop else f"%c{pixels if image else 0}"
+        if p.conv_source:
+            # This profile reads the same physical NHWC input through NC1HWC0
+            # strides, independently of the Mat-source descriptor path.
+            dimensions = f"1x{p.c // 16}x{p.h}x{p.w}x16"
+            conv_part = f"!pto.partition_tensor_view<{dimensions}xf16, {conv_layout}>"
+            lines += [
+                f"      %ip{image} = pto.partition_view %iv, offsets = [%c{image}, %c0, %c0, %c0, %c0], "
+                f"sizes = [%c1, %c{p.c // 16}, %c{p.h}, %c{p.w}, %c16] : "
+                f"{conv_view} -> {conv_part}",
+                f"      pto.tload ins(%ip{image} : {conv_part}) "
+                f"outs(%image{suffix} : {shape['image']})",
+            ]
+            continue
         if not p.ub_stage:
             lines += [
                 f"      %ip{image} = pto.partition_view %iv, offsets = [{offset}, %c0], "
@@ -215,9 +387,13 @@ def make_program(p: Profile, explicit: bool) -> str:
         positions = f", pos_k = %c{p.k0}"
         if not p.omit_m:
             positions = f", pos_m = %c{p.m0}" + positions
+        if p.filter_order is not None:
+            taps = ", ".join(map(str, p.filter_order))
+            positions += f" filter_order = [{taps}]"
+        config = "" if p.conv_source else ", config = #image_config"
         lines.append(
             f"      pto.timg2col {left}, %image{suffix}{positions} "
-            f"{{fmatrixMode = #pto.fmatrix_mode<a_auto>, config = #image_config}} : "
+            f"{{fmatrixMode = #pto.fmatrix_mode<a_auto>{config}}} : "
             f"{shape['left']}, {shape['image']}"
         )
         acc = "%acc, " if image else ""
@@ -278,7 +454,11 @@ def check_image_dependencies(code: str, p: Profile) -> None:
     pipe = "MTE3" if p.ub_stage else "MTE2"
     for im2col in re.finditer(r"TIMG2COL<[^;]+;", code):
         before = code[: im2col.start()]
-        images = re.findall(r"__cbuf__ half\* \w+ = (\w+)\.data\(\);", before)
+        images = (
+            [im2col.group(0).split("(", 1)[1].split(",")[1].strip()]
+            if p.conv_source
+            else re.findall(r"__cbuf__ half\* \w+ = (\w+)\.data\(\);", before)
+        )
         if not images:
             raise RuntimeError("Missing original Mat image pointer")
         writes = list(re.finditer(rf"{writer}\({images[-1]},[^;]+;", before))
@@ -326,8 +506,17 @@ def check_structure(code: str, planned: str, p: Profile) -> None:
         raise RuntimeError("Unexpected image/weight DMA or im2col sites")
     if p.ub_stage and code.count("TINSERT(") != loads:
         raise RuntimeError("Missing C16 UB-to-L1 insertions")
-    if "!pto.conv_tile_buf" in planned or "PTOAS__INIT_CONVTILE_CONFIG(" not in code:
-        raise RuntimeError("Expected original Mat SSA and native-only image descriptor")
+    if ("!pto.conv_tile_buf" in planned) != p.conv_source:
+        raise RuntimeError("Image source representation changed during planning")
+    if p.filter_order is not None:
+        policy = (
+            "std::integer_sequence<int, " + ", ".join(map(str, p.filter_order)) + ">"
+        )
+        selection = "filter_order = [" + ", ".join(map(str, p.filter_order)) + "]"
+        if policy not in code or selection not in planned:
+            raise RuntimeError(
+                "Selected filter order was lost during lowering or planning"
+            )
     producers = (
         (("MTE2", "MTE3"), ("MTE3", "MTE1")) if p.ub_stage else (("MTE2", "MTE1"),)
     )
@@ -342,12 +531,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("generate", "check"))
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--profile", choices=tuple(p.name for p in PROFILES))
+    parser.add_argument("--profile", choices=tuple(p.name for p in ALL_PROFILES))
+    parser.add_argument(
+        "--profile-set", choices=("base", "filter_order", "all"), default="base"
+    )
     parser.add_argument("--level", choices=("level1", "level2", "level3"))
     args = parser.parse_args()
     output = args.output_dir.resolve()
     if args.action == "generate":
-        for p in PROFILES:
+        profiles = {
+            "base": PROFILES,
+            "filter_order": FILTER_PROFILES,
+            "all": ALL_PROFILES,
+        }[args.profile_set]
+        for p in profiles:
             for level in ("level1", "level2", "level3"):
                 directory = output / f"{p.name}-{level}"
                 directory.mkdir(parents=True, exist_ok=True)
@@ -359,7 +556,7 @@ def main() -> None:
         return
     if args.profile is None or args.level is None:
         parser.error("check requires --profile and --level")
-    p = next(p for p in PROFILES if p.name == args.profile)
+    p = next(p for p in ALL_PROFILES if p.name == args.profile)
     directory = output / f"{p.name}-{args.level}"
     check_structure(
         (directory / "generated.cpp").read_text(),

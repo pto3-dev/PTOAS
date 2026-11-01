@@ -19,7 +19,15 @@ CONFIG = """#pto.conv_tile_config<fmap_h=4, fmap_w=4, pad_list=1x1x1x1,
     repeat_mode=0, dst_stride=0, dst_mposition=0, transpose=false>"""
 
 
-def check_builder(source_type: str, config, has_m: bool, has_k: bool) -> None:
+def check_builder(
+    source_type: str, config, has_m: bool, has_k: bool, filter_order=None
+) -> None:
+    columns = 288 if filter_order is None else 16 * len(filter_order)
+    selection = (
+        None
+        if filter_order is None
+        else Attribute.parse("array<i64: " + ", ".join(map(str, filter_order)) + ">")
+    )
     module = Module.parse(
         """module attributes {pto.target_arch = "a1"} {
       func.func @build(%image: SOURCE,
@@ -27,7 +35,7 @@ def check_builder(source_type: str, config, has_m: bool, has_k: bool) -> None:
           %m: index, %k: index) {
         return
       }
-    }""".replace("SOURCE", source_type)
+    }""".replace("SOURCE", source_type).replace("16x288", f"16x{columns}")
     )
     block = module.body.operations[0].regions[0].blocks[0]
     image, left, m, k = block.arguments
@@ -41,6 +49,7 @@ def check_builder(source_type: str, config, has_m: bool, has_k: bool) -> None:
             posK=expected_k,
             fmatrixMode=Attribute.parse("#pto.fmatrix_mode<a_auto>"),
             config=config,
+            filter_order=selection,
         )
     if (
         op.src != image
@@ -48,6 +57,7 @@ def check_builder(source_type: str, config, has_m: bool, has_k: bool) -> None:
         or op.posM != expected_m
         or op.posK != expected_k
         or op.config != config
+        or op.filter_order != selection
     ):
         raise RuntimeError(
             "im2col builder lost source identity, position operands or configuration"
@@ -61,7 +71,12 @@ def check_builder(source_type: str, config, has_m: bool, has_k: bool) -> None:
     restored_args = restored.body.operations[0].regions[0].blocks[0].arguments
     restored_m = restored_args[2] if has_m else None
     restored_k = restored_args[3] if has_k else None
-    if after.config != config or after.posM != restored_m or after.posK != restored_k:
+    if (
+        after.config != config
+        or after.posM != restored_m
+        or after.posK != restored_k
+        or after.filter_order != selection
+    ):
         raise RuntimeError("im2col round trip changed geometry or optional positions")
 
 
@@ -74,19 +89,27 @@ def main() -> None:
             (False, True),
             (True, True),
         ):
-            check_builder(
-                "!pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>",
-                Attribute.parse(CONFIG),
-                has_m,
-                has_k,
-            )
-            # The old source form and its omitted operation config remain valid.
-            check_builder(
-                "!pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>",
+            for selection in (
                 None,
-                has_m,
-                has_k,
-            )
+                (0, 4, 8, 3, 7, 2, 6, 1, 5),
+                (0, 4, 8, 3, 7, 2),
+                (6, 7, 8),
+            ):
+                check_builder(
+                    "!pto.tile_buf<mat, 16x32xf16, blayout=col_major, slayout=row_major, fractal=512>",
+                    Attribute.parse(CONFIG),
+                    has_m,
+                    has_k,
+                    selection,
+                )
+                # The old source form and its omitted operation config remain valid.
+                check_builder(
+                    "!pto.conv_tile_buf<mat, 1x2x4x4x16xf16, layout=#pto.conv_layout<nc1hwc0>>",
+                    None,
+                    has_m,
+                    has_k,
+                    selection,
+                )
     print("img2col_mat_source_bindings: PASS")
 
 

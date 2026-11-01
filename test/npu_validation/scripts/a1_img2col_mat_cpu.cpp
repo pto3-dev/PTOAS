@@ -28,6 +28,29 @@ constexpr int kOutputWidth = (IMG_W + IMG_PL + IMG_PR - IMG_DW * (IMG_KW - 1) - 
 constexpr int kOutputHeight = (IMG_H + IMG_PT + IMG_PB - IMG_DH * (IMG_KH - 1) - 1) / IMG_SH + 1;
 static_assert(IMG_M0 >= 0 && IMG_M0 + IMG_ROWS <= kOutputWidth * kOutputHeight);
 
+#if defined(IMG_FILTER_ORDER)
+constexpr int kFilterOrder[] = {IMG_FILTER_ORDER};
+static_assert(sizeof(kFilterOrder) / sizeof(kFilterOrder[0]) * 16 == IMG_K);
+static_assert(IMG_K0 % (IMG_KH * IMG_KW * 16) == 0);
+constexpr bool validFilterOrder() {
+  for (int tap : kFilterOrder) {
+    if (tap < 0 || tap >= IMG_KH * IMG_KW) {
+      return false;
+    }
+  }
+  return true;
+}
+static_assert(validFilterOrder());
+#endif
+
+int reductionIndex(int k) {
+#if defined(IMG_FILTER_ORDER)
+  return IMG_K0 + kFilterOrder[k / 16] * 16 + k % 16;
+#else
+  return IMG_K0 + k;
+#endif
+}
+
 half sample(int index, int dataset, unsigned multiplier, float divisor) {
   if (dataset == 2) {
     const unsigned pattern = static_cast<unsigned>(index) * multiplier % 63488;
@@ -58,7 +81,7 @@ void reference(const std::vector<half> &input, const std::vector<half> &weight, 
         for (int source = 0; source < (IMG_SUM ? IMG_IMAGES : 1); ++source) {
           const int selected = IMG_SUM ? source : image;
           for (int k = 0; k < IMG_K; ++k) {
-            total = std::fma(imageValue(input, selected, IMG_M0 + row, IMG_K0 + k),
+            total = std::fma(imageValue(input, selected, IMG_M0 + row, reductionIndex(k)),
                              static_cast<float>(weight[kGuard + k * 16 + column]), total);
           }
         }
