@@ -27,6 +27,13 @@ inline bool isTileLibExpandableOp(Operation *op) {
       return false;
     }
   }
+  // C16 block selection is native MTE1 DMA, not a rectangular TileLib slice.
+  if (auto extract = dyn_cast<TExtractOp>(op)) {
+    const bool nativeExtraction = extract.getBlockStepAttr() || isTargetArchA1(op);
+    if (nativeExtraction) {
+      return false;
+    }
+  }
   return !isa<TReshapeOp, TSyncOp, TAllocToAivOp, TAllocToAicOp,
               TPushToAivOp, TPushToAicOp, TPopFromAicOp, TPopFromAivOp,
               TFreeFromAicOp, TFreeFromAivOp>(op);

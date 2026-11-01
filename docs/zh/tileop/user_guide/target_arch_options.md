@@ -205,3 +205,18 @@ L1 为 1 MiB，UB 保守保持 128 KiB，L0A/L0B 各 64 KiB，L0C 为 256 KiB。
 矩阵；列数、Cube 操作数维度与 L0 容量限制不变，im2col 图像限制另行校验。
 静态/有界循环偏移须证明完整跨度，避免索引加法或跨度乘法溢出。
 需要配套的 A1 跨步 TINSERT ISA；CPU 与离线编译不能证明设备重叠或整模性能。
+
+
+### A1 按 C16 块跨步的 Mat 到 Right 提取
+
+既有 `pto.textract` 在 A1 可指定 `block_step = 4 : i64`，输出元素 `(r,c)`
+读取源 `(indexRow + (r / 16) * block_step * 16 + r % 16, indexCol + c)`。
+源为 1 MiB L1 内完整静态 FP16 NZ/ZZ Mat；目标为 64 KiB L0B 内完整
+N16/N32 ZN Right，行数不超过 2048。两个偏移按 C16 对齐，完整选择跨度须处于源内。
+步长为 unsigned 32 位内正整数；只有一个输出块时未使用的原生块间步长规范化为 1。
+静态、有界循环及 SPMD 偏移须在转换为原生 uint16_t 参数前证明边界和对齐。
+
+显式属性（包括 1）生成 `TEXTRACT<step>`；缺省保留普通连续提取。
+A1 提取为原生 MTE1 DMA，不使用矩形 TileLib 模板展开。其他后端拒绝该属性。
+已有内存效果及调度须保留源就绪、MTE1→M 消费和 M→MTE1 的 Right bank 回收依赖。
+须使用配套 A1 块跨步 PTO-ISA；CPU 和原生离线编译不能证明设备重叠或整模性能。

@@ -49,6 +49,10 @@ struct PTOExtractToEmitC : public OpConversionPattern<pto::TExtractOp> {
   static FailureOr<ArrayAttr>
   buildTemplateArgs(pto::TExtractOp op, OpAdaptor adaptor,
                     ConversionPatternRewriter &rewriter) {
+    if (auto blockStep = op.getBlockStepAttr()) {
+      return rewriter.getArrayAttr({emitc::OpaqueAttr::get(
+          rewriter.getContext(), std::to_string(blockStep.getInt()))});
+    }
     auto modeAttr = op.getAccToVecModeAttr();
     const bool hasMode = static_cast<bool>(modeAttr);
     const bool hasRelu = op.getReluPreMode() != pto::ReluPreMode::NoRelu;

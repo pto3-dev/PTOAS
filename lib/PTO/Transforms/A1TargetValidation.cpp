@@ -357,6 +357,27 @@ LogicalResult validateA1VecMatInsertion(TInsertOp insert)
     return success();
 }
 
+LogicalResult validateA1MatRightExtraction(TExtractOp extract)
+{
+    const auto source = cast<TileBufType>(extract.getSrc().getType());
+    const auto target = cast<TileBufType>(extract.getDst().getType());
+    const auto step = extract.getBlockStepAttr();
+    const auto span = getA1BlockExtractSpan(target.getShape()[0], source.getShape()[0], step ? step.getInt() : 1);
+    const auto row = offsetFacts(extract.getIndexRow());
+    const auto column = offsetFacts(extract.getIndexCol());
+    constexpr int64_t maxOffset = std::numeric_limits<uint16_t>::max();
+    if (!span || target.getShape()[1] > source.getShape()[1] ||
+        row.lower < 0 || column.lower < 0 || row.multiple % kA1ExtractBlockRows ||
+        column.multiple % kA1ExtractBlockRows || row.upper > maxOffset || column.upper > maxOffset) {
+        return extract.emitOpError("A1 extraction requires bounded C16-aligned source offsets and a complete span.");
+    }
+    if (row.upper > source.getShape()[0] - *span ||
+        column.upper > source.getShape()[1] - target.getShape()[1]) {
+        return extract.emitOpError("A1 extraction complete selected window exceeds its source.");
+    }
+    return success();
+}
+
 LogicalResult validateTile(Operation* op, TileBufType tile)
 {
     auto shape = tile.getShape();
@@ -832,7 +853,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                 AddPtrOp, MakeTensorViewOp, PartitionViewOp, AllocTileOp, SubViewOp, TLoadOp, TStoreOp, TAddOp, TSubOp, TMulOp,
                 TMulSOp, TGatherOp, TSort32Op, TMrgSortOp,
                 TDivOp, TExpOp, TMaxOp, TReshapeOp, TGetValOp, TSetValOp, TExpandsOp, TRowExpandOp, TColExpandOp,
-                TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
+                TRowSumOp, TRowMaxOp, TColSumOp, TColMaxOp, TMovOp, TInsertOp, TExtractOp,
+                TMatmulOp, TMatmulAccOp, TImg2colOp, TCvtOp, SectionCubeOp, SectionVectorOp,
                 SetFlagOp, WaitFlagOp, BarrierOp, FenceBarrierAllOp, GetBlockIdxOp, GetBlockNumOp>(op))
             return reject("operation is not yet supported by the A1 EmitC profile.");
         for (Type type : op->getOperandTypes())
@@ -1083,6 +1105,11 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         if (auto exponential = dyn_cast<TExpOp>(op))
             if (exponential.getPrecisionType() != ExpPrecision::Default)
                 return reject("A1 exponential supports default precision only.");
+        if (auto extract = dyn_cast<TExtractOp>(op)) {
+            if (failed(validateA1MatRightExtraction(extract))) {
+                return WalkResult::interrupt();
+            }
+        }
         if (auto insert = dyn_cast<TInsertOp>(op)) {
             auto source = cast<TileBufType>(insert.getSrc().getType());
             auto destination = cast<TileBufType>(insert.getDst().getType());
