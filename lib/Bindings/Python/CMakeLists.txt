@@ -40,12 +40,19 @@ set(PTOAS_MLIR_PYTHON_PACKAGE_DIR "${CMAKE_BINARY_DIR}/python/ptoas/mlir")
 
 declare_mlir_python_sources(PTOASPythonSources)
 
+# The Makefile TableGen fallback sees this directory's thin wrapper and LLVM
+# inputs, but not the canonical project ODS included by that wrapper. Track
+# them explicitly so an incremental dialect change refreshes Python builders.
+file(GLOB PTOAS_PYTHON_ODS_DEPENDS CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/include/PTO/IR/*.td")
+
 declare_mlir_dialect_python_bindings(
   ADD_TO_PARENT PTOASPythonSources
   ROOT_DIR "${CMAKE_SOURCE_DIR}/python/pto"
   TD_FILE dialects/PTOOps.td
   SOURCES dialects/pto.py
   DIALECT_NAME pto
+  DEPENDS ${PTOAS_PYTHON_ODS_DEPENDS}
 )
 
 # Use MLIR's standard site-initializer hook to seed each Python Context with

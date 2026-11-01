@@ -262,9 +262,44 @@ static LogicalResult verifyTImg2colElemType(TImg2colOp op) {
   return success();
 }
 
+static LogicalResult verifyTImg2colFilterOrder(TImg2colOp op) {
+  auto order = op.getFilterOrderAttr();
+  if (!order) {
+    return success();
+  }
+  const bool isA1 = pto::isTargetArchA1(op.getOperation());
+  if (!isA1) {
+    return op.emitOpError("filter_order is supported only on A1");
+  }
+  const auto taps = order.asArrayRef();
+  const bool supportedCount = !taps.empty() && taps.size() <= 127;
+  if (!supportedCount) {
+    return op.emitOpError("filter_order requires 1..127 selected filter taps");
+  }
+  llvm::SmallSet<int64_t, 16> seen;
+  for (int64_t tap : taps) {
+    if (tap < 0 || tap >= 255 * 255) {
+      return op.emitOpError("filter_order requires unique filter taps in [0, 65024]");
+    }
+    const bool inserted = seen.insert(tap).second;
+    if (!inserted) {
+      return op.emitOpError("filter_order requires unique filter taps in [0, 65024]");
+    }
+  }
+  auto left = cast<pto::TileBufType>(op.getDst().getType());
+  const int64_t columns = static_cast<int64_t>(taps.size()) * 16;
+  if (left.getShape()[1] != columns) {
+    return op.emitOpError("filter_order requires Left columns equal to 16 times its length");
+  }
+  return success();
+}
+
 LogicalResult mlir::pto::TImg2colOp::verify() {
   if (failed(verifyTileBufCommon(*this, getDst().getType(), "dst",
                                  /*allowLowPrecision=*/true))) {
+    return failure();
+  }
+  if (failed(verifyTImg2colFilterOrder(*this))) {
     return failure();
   }
   const bool matSource = isa<pto::TileBufType>(getSrc().getType());

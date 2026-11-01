@@ -137,10 +137,19 @@ struct PTOTImg2colToEmitC : public OpConversionPattern<pto::TImg2colOp> {
         {*getEmitCTileTypeString(cast<pto::TileBufType>(op.getDst().getType())),
          source.second});
 
+    SmallVector<Value> arguments{dst, src, posM, posK};
+    if (auto order = op.getFilterOrderAttr()) {
+      std::string policy = "std::integer_sequence<int";
+      for (int64_t tap : order.asArrayRef()) {
+        policy += ", " + std::to_string(tap);
+      }
+      policy += ">";
+      Value selection = rewriter.create<emitc::ConstantOp>(
+          loc, emitc::OpaqueType::get(ctx, policy), emitc::OpaqueAttr::get(ctx, "{}"));
+      arguments.push_back(selection);
+    }
     createLastUseAwareOpaqueCall(rewriter, op.getOperation(), TypeRange{},
-                                 "TIMG2COL",
-                                 ValueRange{dst, src, posM, posK}, ArrayAttr{},
-                                 templateArgs);
+                                 "TIMG2COL", arguments, ArrayAttr{}, templateArgs);
     rewriter.eraseOp(op);
     return success();
   }

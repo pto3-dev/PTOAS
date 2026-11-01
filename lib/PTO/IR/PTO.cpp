@@ -12,6 +12,7 @@
 #include "PTO/IR/PTO.h"
 
 #include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "llvm/ADT/SmallSet.h"
 
 // PTO IR implementation is grouped by semantic responsibility. The files
 // remain textual fragments to preserve declaration order and internal linkage.

@@ -17,8 +17,13 @@ python_bin=$(command -v "${PYTHON:-python3}")
 : "${PTO_ISA_ROOT:?Set PTO_ISA_ROOT to the matching A1 ISA}"
 mat_work="${PTOAS_IMG2COL_MAT_OUTPUT_DIR:-$repo_root/build/a1-img2col-mat-host}"
 helper="$repo_root/test/npu_validation/scripts/generate_a1_img2col_mat_profiles.py"
+profile_set="${1:-base}"
+case "$profile_set" in
+    base|filter_order|all) ;;
+    *) printf 'Invalid fixture profile set\n' >&2; exit 1 ;;
+esac
 mkdir -p -- "$mat_work"
-"$python_bin" "$helper" generate --output-dir "$mat_work" > "$mat_work/profiles.tsv"
+"$python_bin" "$helper" generate --profile-set "$profile_set" --output-dir "$mat_work" > "$mat_work/profiles.tsv"
 profile_count=0
 output_words=0
 while IFS=$'\t' read -r profile level words definitions; do
@@ -32,7 +37,10 @@ while IFS=$'\t' read -r profile level words definitions; do
     fi
     read -r -a mat_definitions <<< "$definitions"
     for definition in "${mat_definitions[@]}"; do
-        if [[ ! "$definition" =~ ^-DIMG_[A-Z0-9_]+=[0-9]+$ ]]; then
+        if [[ "$definition" =~ ^-DIMG_FILTER_ORDER=[0-9]{1,5}(,[0-9]{1,5}){0,126}$ ]]; then
+            continue
+        fi
+        if [[ ! "$definition" =~ ^-DIMG_[A-Z0-9_]+=[0-9]+$ || "$definition" == -DIMG_FILTER_ORDER=* ]]; then
             printf 'Invalid fixture definition\n' >&2
             exit 1
         fi
@@ -45,8 +53,13 @@ while IFS=$'\t' read -r profile level words definitions; do
     cat -- "$directory/generated.cpp" \
         "$repo_root/test/npu_validation/scripts/a1_img2col_mat_cpu.cpp" >> "$directory/oracle.cpp"
     "$cxx_bin" -std=c++20 -O1 -ffp-contract=off -D__CPU_SIM -D__DAV_CUBE__ -D__DAV_VEC__ \
+        -DPTO_UBUF_SIZE_BYTES=131072 -DPTO_CBUF_SIZE_BYTES=1048576 -DPTO_L0C_SIZE_BYTES=262144 \
         "-I$PTO_ISA_ROOT/include" "${mat_definitions[@]}" "$directory/oracle.cpp" -o "$directory/oracle"
-    "$directory/oracle"
+    # The generic simulator has no A1 selector. Match its runtime buffers to
+    # A1's static limits, retaining the compiler's conservative 128 KiB UB.
+    PTO_CPU_SIM_ARCH=a2a3 PTO_CPU_SIM_UB_BYTES=131072 \
+        PTO_CPU_SIM_L1_BYTES=1048576 PTO_CPU_SIM_L0A_BYTES=65536 \
+        PTO_CPU_SIM_L0B_BYTES=65536 PTO_CPU_SIM_L0C_BYTES=262144 "$directory/oracle"
     "$native_bin" -c -O2 -x cce -std=c++17 --cce-aicore-only --cce-aicore-arch=dav-m200 \
         "-I$PTO_ISA_ROOT/include" "$directory/generated.cpp" -o "$directory/native.o"
     profile_count=$((profile_count + 1))
