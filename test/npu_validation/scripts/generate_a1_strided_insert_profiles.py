@@ -28,6 +28,7 @@ class Profile:
     column: int = 16
     kind: str = "single"
     groups: int = 1
+    allocation_validity: bool = False
 
 
 PROFILES = [
@@ -51,13 +52,35 @@ PROFILES = [
         for channels, groups in ((3, 1), (16, 1), (16, 2))
         for columns in (16, 32)
     ],
+    # Exercise the public frontend's constant allocation operands with an
+    # unchanged independent oracle, including bank reuse and compact packing.
+    Profile(allocation_validity=True),
+    Profile(rows=3, cols=16, dst_cols=16, column=0, allocation_validity=True),
+    Profile(row=124, kind="banks", allocation_validity=True),
+    Profile(
+        dst_rows=4608,
+        dst_cols=32,
+        row=0,
+        column=0,
+        kind="sparse",
+        groups=2,
+        allocation_validity=True,
+    ),
 ]
 
 
-def tile(space, rows, columns):
+def tile(space, rows, columns, allocation_validity=False):
     layout = (
         ", blayout=col_major, slayout=row_major, fractal=512" if space == "mat" else ""
     )
+    if allocation_validity:
+        # The long-form type grammar requires explicit layout/fractal/pad
+        # fields, including the ordinary ND defaults on a Vec descriptor.
+        full_layout = layout or ", blayout=row_major, slayout=none_box, fractal=512"
+        return (
+            f"!pto.tile_buf<loc={space}, dtype=f16, rows={rows}, cols={columns}, "
+            f"v_row=?, v_col=?{full_layout}, pad=0>"
+        )
     return f"!pto.tile_buf<{space}, {rows}x{columns}xf16{layout}>"
 
 
@@ -67,8 +90,12 @@ class Program:
         self.manual = level == "level3"
         self.constants = {}
         self.body = []
-        self.source_type = tile("vec", profile.rows, profile.cols)
-        self.target_type = tile("mat", profile.dst_rows, profile.dst_cols)
+        self.source_type = tile(
+            "vec", profile.rows, profile.cols, profile.allocation_validity
+        )
+        self.target_type = tile(
+            "mat", profile.dst_rows, profile.dst_cols, profile.allocation_validity
+        )
 
     def constant(self, number, dtype="index"):
         name = f"%a{number}" if dtype == "i64" else f"%c{number}"
@@ -77,6 +104,17 @@ class Program:
 
     def allocate(self, name, dtype, address):
         annotation = f" addr = {self.constant(address, 'i64')}" if self.manual else ""
+        # The descriptor remains dynamic, while its allocation proves each
+        # valid axis equals the physical extent before target normalization.
+        if self.profile.allocation_validity:
+            if dtype == self.source_type:
+                rows, columns = self.profile.rows, self.profile.cols
+            elif dtype == self.target_type:
+                rows, columns = self.profile.dst_rows, self.profile.dst_cols
+            else:
+                rows, columns = None, None
+            if rows is not None:
+                annotation += f" valid_row = {self.constant(rows)} valid_col = {self.constant(columns)}"
         self.body.append(f"%{name} = pto.alloc_tile{annotation} : {dtype}")
 
     def load(self, name, row, col, vector):
