@@ -57,6 +57,9 @@ ptoas input.pto --pto-arch=a5 -o output.cpp
 A1 耦合核 dispatch 最多使用 8 个 block。DMA 可使用由 `pto.get_block_idx`、
 正步长静态上界循环及整数算术推导的动态偏移；验证器必须证明非负、32 字节
 对齐以及完整 tile 位于源视图内。未知参数、无法证明的上界和算术溢出仍被拒绝。
+有界减法使用 `[lhs.lower - rhs.upper, lhs.upper - rhs.lower]`，保留两操作数
+对齐倍数的最大公约数；端点减法可能有符号溢出时仍拒绝。此规则同样适用于
+硬件 im2col 和本地提取的动态窗口，不放宽任何实际边界。
 
 ### A1 动态 UB 槽位
 
