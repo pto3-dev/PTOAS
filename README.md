@@ -433,6 +433,11 @@ cmake --build build --target PTOASPythonPackage --parallel 2
 
 ## Ascend 310P / A1 EmitC target
 
+Bounded dynamic offsets support subtraction using reversed RHS interval endpoints
+and the operands' common alignment. Either signed endpoint overflowing leaves the
+offset unproven; existing DMA, im2col and local-window bounds remain mandatory.
+
+
 Select the independent A1 target with `--pto-arch=a1` (case insensitive),
 `pto.target_arch = "a1"`, or `pto.device-spec = "Ascend310P3"`. An explicit
 CLI architecture takes precedence over module metadata. A1 supports EmitC;

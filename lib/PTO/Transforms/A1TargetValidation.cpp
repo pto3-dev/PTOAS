@@ -59,6 +59,20 @@ OffsetFacts zeroExtendedOffsetFacts(Value input, Type outputType)
     return {0, static_cast<int64_t>(maximum), 1};
 }
 
+// G.INT.01: subtraction reverses the RHS endpoints, and both signed
+// endpoints must be representable before a mathematical interval is trusted.
+OffsetFacts subtractOffsetFacts(const OffsetFacts& lhs, const OffsetFacts& rhs)
+{
+    int64_t lower = 0;
+    int64_t upper = 0;
+    const bool lowerOverflow = llvm::SubOverflow(lhs.lower, rhs.upper, lower);
+    const bool upperOverflow = llvm::SubOverflow(lhs.upper, rhs.lower, upper);
+    if (lowerOverflow || upperOverflow) {
+        return {};
+    }
+    return {lower, upper, std::gcd(lhs.multiple, rhs.multiple)};
+}
+
 OffsetFacts offsetFacts(Value value, unsigned depth = 0)
 {
     if (!value || depth > 32)
@@ -133,6 +147,9 @@ OffsetFacts offsetFacts(Value value, unsigned depth = 0)
     if (isa<arith::AddIOp>(op) && !llvm::AddOverflow(a.lower, b.lower, lower) &&
         !llvm::AddOverflow(a.upper, b.upper, upper))
         return {lower, upper, multiple};
+    if (isa<arith::SubIOp>(op)) {
+        return subtractOffsetFacts(a, b);
+    }
     if (isa<arith::MulIOp>(op) && a.lower >= 0 && b.lower >= 0 && !llvm::MulOverflow(a.lower, b.lower, lower) &&
         !llvm::MulOverflow(a.upper, b.upper, upper)) {
         uint64_t product;
