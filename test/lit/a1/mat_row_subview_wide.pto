@@ -5,7 +5,8 @@
 // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
 // INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 // See LICENSE in the root of the software repository for the full text of the License.
-// RUN: not ptoas --pto-arch=a1 %s -o /dev/null 2>&1 | FileCheck %s
+// RUN: ptoas --pto-arch=a1 %s -o - | FileCheck %s
+// A wider parent is legal when the row window stays inside one C16 column.
 module attributes {pto.target_arch = "a1"} {
   func.func @a1_mat_row_subview(%out: !pto.ptr<f32>, %in: !pto.ptr<f16>, %weight: !pto.ptr<f16>) attributes {pto.entry} {
     pto.section.cube {
@@ -42,4 +43,8 @@ module attributes {pto.target_arch = "a1"} {
     return
   }
 }
-// CHECK: A1 Mat subviews require a bounded aligned full-width C16 row interval
+// CHECK-LABEL: a1_mat_row_subview(
+// CHECK: TLOAD(
+// CHECK: TINSERT(
+// CHECK: TMATMUL(
+// CHECK: TSTORE(

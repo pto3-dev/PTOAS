@@ -913,8 +913,12 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
             if (matView) {
                 const auto rowFacts = offsetFacts(subview.getOffsets()[0]);
                 const auto colFacts = offsetFacts(subview.getOffsets()[1]);
-                const bool c16Rows = src.getShape()[1] == 16 && dst.getShape()[1] == 16 &&
-                    colFacts.lower == 0 && colFacts.upper == 0 && rowFacts.lower >= 0 &&
+                // A window within one C16 column is contiguous regardless of
+                // the parent's column count. Rebase using the parent pitch;
+                // the child needs no inherited inter-column stride.
+                const bool c16Rows = dst.getShape()[1] == 16 &&
+                    colFacts.lower >= 0 && colFacts.multiple % 16 == 0 &&
+                    colFacts.upper <= src.getShape()[1] - dst.getShape()[1] && rowFacts.lower >= 0 &&
                     rowFacts.multiple % 16 == 0 && rowFacts.upper <= src.getShape()[0] - dst.getShape()[0];
                 // Every aligned full-height NZ column span is physically
                 // contiguous. Its compact child keeps the parent's C16 stride,
@@ -933,7 +937,8 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
                     src.getSFractalSizeI32() != 512 || dst.getSFractalSizeI32() != 512 ||
                     (!c16Rows && !nzColumns) || subview.getValidRow() || subview.getValidCol())
                     return reject("A1 Mat subviews require a bounded aligned full-width C16 row interval "
-                                  "or a full-height static aligned NZ column interval.");
+                                  "or a full-height static aligned NZ column interval, or a bounded "
+                                  "aligned single-C16-column row interval.");
             } else if (vecRows) {
                 const bool invalidVectorRows =
                     !allocatedVectorAliases.contains(subview.getSource()) || src.getBLayoutValueI32() != 0 ||
