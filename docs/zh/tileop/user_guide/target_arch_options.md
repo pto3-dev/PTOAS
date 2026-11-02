@@ -230,3 +230,13 @@ N16/N32 ZN Right，行数不超过 2048。两个偏移按 C16 对齐，完整选
 A1 提取为原生 MTE1 DMA，不使用矩形 TileLib 模板展开。其他后端拒绝该属性。
 已有内存效果及调度须保留源就绪、MTE1→M 消费和 M→MTE1 的 Right bank 回收依赖。
 须使用配套 A1 块跨步 PTO-ISA；CPU 和原生离线编译不能证明设备重叠或整模性能。
+
+### A1 load 缓存别名偏移
+
+A1 `pto.tload` 支持既有 `default` 与 `l2_bypass` 策略。bypass 的可选
+`offset` 是宿主 runtime 提供的字节别名位移；lowering 复制源 descriptor 后
+调整地址，再使用普通 `TLOAD`，保留形状、步幅及其他 load/store 的原地址。
+缺省或零 offset 使用普通地址；仅有 cache 属性不能证明硬件 bypass 生效，
+调用方必须获取有效设备别名并报告查询失败。既有目标、对齐、边界及容量
+检查保持，padding 与初始化模式仍不支持。CPU 与离线编译只证明地址语义，
+不能代替设备缓存行为或性能验收。
