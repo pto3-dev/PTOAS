@@ -745,3 +745,16 @@ Other targets reject `block_step`. Existing memory effects preserve source
 readiness, MTE1-to-M consumption and M-to-MTE1 Right-bank reuse dependencies.
 Use the matching block-step A1 PTO-ISA. CPU and offline target compilation
 validate semantics and encoding, not device overlap or model performance.
+
+### A1 load cache alias offsets
+
+A1 `pto.tload` accepts the existing `default` and `l2_bypass` cache policies.
+With bypass, the optional `offset` is a byte alias displacement supplied by
+the host runtime: lowering rebases a copy of the source descriptor and uses
+ordinary `TLOAD`. Its logical shape, strides and original address remain
+unchanged for other loads and stores. Missing or zero offsets use the ordinary
+address; a cache-policy attribute alone does not prove hardware bypass.
+The caller must obtain a valid device alias and report query failure. All
+existing A1 destination, alignment, bounds and capacity checks still apply;
+padding and initialization modes remain unsupported. CPU and offline
+compilation establish address semantics, not hardware cache behavior or speed.

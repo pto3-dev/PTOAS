@@ -979,8 +979,13 @@ LogicalResult mlir::pto::validateA1Capabilities(ModuleOp module)
         }
         if (auto load = dyn_cast<TLoadOp>(op)) {
             if (load.getPadModeAttr() || load.getPadValue() || load.getLeftPaddingNum() || load.getRightPaddingNum() ||
-                load.getInitOutBuffer() || load.getInitCondition() || load.getCachePolicyAttr())
-                return reject("A1 load padding, initialization and cache-policy modes are unavailable.");
+                load.getInitOutBuffer() || load.getInitCondition()) {
+                return reject("A1 load padding and initialization modes are unavailable.");
+            }
+            // L2 bypass uses the ordinary transfer recipe after rebasing a copy
+            // of the GM descriptor by the caller-provided byte alias offset.
+            // Keep all destination, layout, alignment and bounds checks below;
+            // the alias does not change the logical view or authorize padding.
             if (auto image = dyn_cast<ConvTileBufType>(load.getDst().getType())) {
                 if (failed(validateConvTransfer(load, image)))
                     return WalkResult::interrupt();

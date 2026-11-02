@@ -1,0 +1,126 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd.
+// This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+// CANN Open Software License Agreement Version 2.0 (the "License").
+// Please refer to the License for details. You may not use this file except in compliance with the License.
+// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+// INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+// See LICENSE in the root of the software repository for the full text of the License.
+
+// RUN: ptoas --pto-arch=a1 --pto-level=level3 %s -o - | FileCheck %s
+// The lowered level-3 form owns explicit local addresses; level 1/2 allocate
+// the same tiles automatically. Only that storage annotation is specialized.
+// RUN: sed 's/ addr = %address//' %s > %t.auto.pto
+// RUN: ptoas --pto-arch=a1 --pto-level=level2 %t.auto.pto -o - | FileCheck %s
+// RUN: ptoas --pto-arch=a1 --pto-level=level1 %t.auto.pto -o - | FileCheck %s
+
+module attributes {pto.target_arch = "a1"} {
+  func.func @a1_cache_f16(%src: !pto.ptr<f16>, %out: !pto.ptr<f16>, %alias: i64) attributes {pto.entry} {
+    %address = arith.constant 0 : i64
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %cols = arith.constant 16 : index
+    %src_view = pto.make_tensor_view %src, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %out_view = pto.make_tensor_view %out, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf16>
+    %src_part = pto.partition_view %src_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<1x16xf16>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xf16> -> !pto.partition_tensor_view<1x16xf16>
+    %a = pto.alloc_tile addr = %address : !pto.tile_buf<vec, 1x16xf16>
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xf16>) outs(%a : !pto.tile_buf<vec, 1x16xf16>) {cache_policy = #pto.load_cache_policy<l2_bypass>} offset = %alias : i64
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xf16>) outs(%out_part : !pto.partition_tensor_view<1x16xf16>)
+    // Reusing the same source must keep its original descriptor and address.
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xf16>) outs(%a : !pto.tile_buf<vec, 1x16xf16>) {cache_policy = #pto.load_cache_policy<default>}
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xf16>) outs(%out_part : !pto.partition_tensor_view<1x16xf16>)
+    return
+  }
+  func.func @a1_cache_f32(%src: !pto.ptr<f32>, %out: !pto.ptr<f32>, %alias: i64) attributes {pto.entry} {
+    %address = arith.constant 0 : i64
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %cols = arith.constant 16 : index
+    %src_view = pto.make_tensor_view %src, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %out_view = pto.make_tensor_view %out, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xf32>
+    %src_part = pto.partition_view %src_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x16xf32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xf32> -> !pto.partition_tensor_view<1x16xf32>
+    %a = pto.alloc_tile addr = %address : !pto.tile_buf<vec, 1x16xf32>
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xf32>) outs(%a : !pto.tile_buf<vec, 1x16xf32>) {cache_policy = #pto.load_cache_policy<l2_bypass>} offset = %alias : i64
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xf32>) outs(%out_part : !pto.partition_tensor_view<1x16xf32>)
+    // Reusing the same source must keep its original descriptor and address.
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xf32>) outs(%a : !pto.tile_buf<vec, 1x16xf32>) {cache_policy = #pto.load_cache_policy<default>}
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xf32>) outs(%out_part : !pto.partition_tensor_view<1x16xf32>)
+    return
+  }
+  func.func @a1_cache_i32(%src: !pto.ptr<i32>, %out: !pto.ptr<i32>, %alias: i64) attributes {pto.entry} {
+    %address = arith.constant 0 : i64
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %cols = arith.constant 16 : index
+    %src_view = pto.make_tensor_view %src, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xi32>
+    %out_view = pto.make_tensor_view %out, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xi32>
+    %src_part = pto.partition_view %src_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<1x16xi32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xi32> -> !pto.partition_tensor_view<1x16xi32>
+    %a = pto.alloc_tile addr = %address : !pto.tile_buf<vec, 1x16xi32>
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xi32>) outs(%a : !pto.tile_buf<vec, 1x16xi32>) {cache_policy = #pto.load_cache_policy<l2_bypass>} offset = %alias : i64
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xi32>) outs(%out_part : !pto.partition_tensor_view<1x16xi32>)
+    // Reusing the same source must keep its original descriptor and address.
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xi32>) outs(%a : !pto.tile_buf<vec, 1x16xi32>) {cache_policy = #pto.load_cache_policy<default>}
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xi32>) outs(%out_part : !pto.partition_tensor_view<1x16xi32>)
+    return
+  }
+  func.func @a1_cache_u32(%src: !pto.ptr<ui32>, %out: !pto.ptr<ui32>, %alias: i64) attributes {pto.entry} {
+    %address = arith.constant 0 : i64
+    %zero = arith.constant 0 : index
+    %one = arith.constant 1 : index
+    %cols = arith.constant 16 : index
+    %src_view = pto.make_tensor_view %src, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xui32>
+    %out_view = pto.make_tensor_view %out, shape = [%one, %cols], strides = [%cols, %one] : !pto.tensor_view<?x?xui32>
+    %src_part = pto.partition_view %src_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xui32> -> !pto.partition_tensor_view<1x16xui32>
+    %out_part = pto.partition_view %out_view, offsets = [%zero, %zero], sizes = [%one, %cols] : !pto.tensor_view<?x?xui32> -> !pto.partition_tensor_view<1x16xui32>
+    %a = pto.alloc_tile addr = %address : !pto.tile_buf<vec, 1x16xui32>
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xui32>) outs(%a : !pto.tile_buf<vec, 1x16xui32>) {cache_policy = #pto.load_cache_policy<l2_bypass>} offset = %alias : i64
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xui32>) outs(%out_part : !pto.partition_tensor_view<1x16xui32>)
+    // Reusing the same source must keep its original descriptor and address.
+    pto.tload ins(%src_part : !pto.partition_tensor_view<1x16xui32>) outs(%a : !pto.tile_buf<vec, 1x16xui32>) {cache_policy = #pto.load_cache_policy<default>}
+    pto.tstore ins(%a : !pto.tile_buf<vec, 1x16xui32>) outs(%out_part : !pto.partition_tensor_view<1x16xui32>)
+    return
+  }
+}
+
+// CHECK-LABEL: a1_cache_f16(
+// CHECK: PTOAS__GLOBAL_TENSOR_DATA(
+// CHECK: reinterpret_cast<__gm__ uint8_t*>
+// CHECK: TASSIGN(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK-NOT: TASSIGN
+// CHECK: TLOAD(
+// CHECK: TSTORE(
+// CHECK-LABEL: a1_cache_f32(
+// CHECK: PTOAS__GLOBAL_TENSOR_DATA(
+// CHECK: reinterpret_cast<__gm__ uint8_t*>
+// CHECK: TASSIGN(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK-NOT: TASSIGN
+// CHECK: TLOAD(
+// CHECK: TSTORE(
+// CHECK-LABEL: a1_cache_i32(
+// CHECK: PTOAS__GLOBAL_TENSOR_DATA(
+// CHECK: reinterpret_cast<__gm__ uint8_t*>
+// CHECK: TASSIGN(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK-NOT: TASSIGN
+// CHECK: TLOAD(
+// CHECK: TSTORE(
+// CHECK-LABEL: a1_cache_u32(
+// CHECK: PTOAS__GLOBAL_TENSOR_DATA(
+// CHECK: reinterpret_cast<__gm__ uint8_t*>
+// CHECK: TASSIGN(
+// CHECK: TLOAD(
+// CHECK: set_flag(PIPE_MTE2, PIPE_MTE3,
+// CHECK: TSTORE(
+// CHECK-NOT: TASSIGN
+// CHECK: TLOAD(
+// CHECK: TSTORE(
